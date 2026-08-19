@@ -7,18 +7,41 @@ Reads a YAML config, builds one part family, verifies, saves FCStd + STEP.
 Run headless:
   /Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd generator_template.FCMacro
   CONFIG=path/to/other.yaml freecadcmd generator_template.FCMacro
+  EXPORT_DIR=exports freecadcmd generator_template.FCMacro   # also refresh curated exports
+
+Outputs follow reference/output-convention.md:
+  OUT_DIR/<family>/<SKU>/rNNN/{cad-manifest.json, <id>.FCStd, step/<id>-<part>.step}
+  rNNN is reused when the config sha matches the existing manifest, else bumped.
 
 FRAME: part axis = +Z, base disc bottom at Z=0, all dims mm.
 """
-import os, re, zipfile
+import os, re, zipfile, json, hashlib, datetime, glob, shutil
 import FreeCAD as App
 import Part
 from FreeCAD import Vector
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.environ.get("CONFIG", os.path.join(HERE, "config.example.yaml"))
-OUT_DIR = os.environ.get("OUT_DIR", os.path.join(HERE, "generated"))
+OUT_DIR = os.environ.get("OUT_DIR", os.path.join(HERE, "output"))
+EXPORT_DIR = os.environ.get("EXPORT_DIR", "")          # "" = don't refresh exports/
+FAMILY = "arbor"
 DOC_NAME = "Arbor"
+
+def sha12(path):
+    return hashlib.sha256(open(path, "rb").read()).hexdigest()[:12]
+
+def allocate_rev(sku_dir, config_sha):
+    """Reuse the rev whose manifest has this config_sha, else next rNNN."""
+    os.makedirs(sku_dir, exist_ok=True)
+    revs = sorted(d for d in os.listdir(sku_dir) if re.match(r"^r\d{3}$", d))
+    for r in revs:
+        m = os.path.join(sku_dir, r, "cad-manifest.json")
+        try:
+            if json.load(open(m)).get("config_sha") == config_sha:
+                return os.path.join(sku_dir, r)
+        except Exception:
+            pass
+    return os.path.join(sku_dir, "r%03d" % (len(revs) + 1))
 
 # ---------------------------------------------------------------- config
 def load_yaml(path):
@@ -89,22 +112,52 @@ def write_gui_visibility(fcstd, names):
 
 def main():
     cfg = load_yaml(CONFIG)
-    os.makedirs(OUT_DIR, exist_ok=True)
+    sku = str(cfg.get("name", "default"))
+    ident = "%s-%s" % (FAMILY, sku)
+    config_sha = sha12(CONFIG)
+    rev_dir = allocate_rev(os.path.join(OUT_DIR, FAMILY, sku), config_sha)
+    step_dir = os.path.join(rev_dir, "step"); os.makedirs(step_dir, exist_ok=True)
+
     doc = App.getDocument(DOC_NAME) if DOC_NAME in App.listDocuments() else App.newDocument(DOC_NAME)
     for o in list(doc.Objects):
         doc.removeObject(o.Name)
     solid, info = build_arbor(cfg)
-    name = "Arbor_%s_L%g" % (cfg.get("name", "X"), cfg["stack_length"])
-    obj = doc.addObject("Part::Feature", name); obj.Shape = solid; obj.Visibility = True
+    part = "arbor_L%g" % cfg["stack_length"]
+    obj = doc.addObject("Part::Feature", "%s_%s" % (sku, part)); obj.Shape = solid; obj.Visibility = True
     doc.recompute()
-    print("%s:" % name)
+    print("%s (%s):" % (ident, os.path.relpath(rev_dir)))
     ok = verify(solid, info, cfg)
     for o in doc.Objects: o.purgeTouched()
-    fcstd = os.path.join(OUT_DIR, DOC_NAME + ".FCStd"); doc.saveAs(fcstd)
+
+    fcstd = os.path.join(rev_dir, ident + ".FCStd"); doc.saveAs(fcstd)
     if not App.GuiUp: write_gui_visibility(fcstd, [o.Name for o in doc.Objects])
-    step = os.path.join(OUT_DIR, name + ".step"); solid.exportStep(step)
+    step = os.path.join(step_dir, "%s-%s.step" % (ident, part)); solid.exportStep(step)
     back = Part.read(step)
-    print("  STEP round-trip      solids=%d dV=%.4f" % (len(back.Solids), abs(back.Volume - solid.Volume)))
-    print("RESULT %s -> %s" % ("PASS" if ok and back.Solids else "FAIL", OUT_DIR))
+    dv = abs(back.Volume - solid.Volume)
+    print("  STEP round-trip      solids=%d dV=%.4f" % (len(back.Solids), dv))
+    result = "PASS" if ok and back.Solids else "FAIL"
+
+    manifest = {
+        "format": "cad-manifest", "schemaVersion": 1,
+        "design": "%s@%s" % (ident, config_sha),
+        "config_sha": config_sha, "config_path": os.path.relpath(CONFIG),
+        "generator": "%s@%s" % (os.path.basename(__file__), sha12(__file__)),
+        "units": "mm",
+        "params": {"arbor_od": round(info["arbor_od"], 3), "height": round(info["height"], 3),
+                   "stack_length": cfg["stack_length"], "bore": cfg["inner_diameter"]},
+        "parts": {part: {"file": os.path.relpath(step, rev_dir), "volume_mm3": round(solid.Volume)}},
+        "checks": {"hole_residual": round(info["hole"].common(solid).Volume, 6),
+                   "step_roundtrip_dV": round(dv, 6), "result": result},
+        "generated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    json.dump(manifest, open(os.path.join(rev_dir, "cad-manifest.json"), "w"), indent=2)
+
+    if EXPORT_DIR:   # curated, committed copy of the latest STEPs + manifest
+        dst = os.path.join(EXPORT_DIR, FAMILY); os.makedirs(dst, exist_ok=True)
+        for f in glob.glob(os.path.join(step_dir, "*.step")):
+            shutil.copy2(f, dst)
+        shutil.copy2(os.path.join(rev_dir, "cad-manifest.json"), os.path.join(dst, ident + ".manifest.json"))
+        print("  exported -> %s" % dst)
+    print("RESULT %s -> %s" % (result, os.path.relpath(rev_dir)))
 
 main()

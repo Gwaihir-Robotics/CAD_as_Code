@@ -1,15 +1,15 @@
-"""Standalone checks over generated/ (run under freecadcmd):
+"""Standalone checks over output/ (every rev, every STEP; run under freecadcmd):
    freecadcmd verify_template.FCMacro   (.FCMacro so freecadcmd executes it)
 Add per-project checks here when they are too slow for every generator run."""
 import glob, os, sys
 import FreeCAD
 import Part
-GEN = os.environ.get("OUT_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated"))
+GEN = os.environ.get("OUT_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "output"))
 bad = 0
-for step in sorted(glob.glob(os.path.join(GEN, "*.step"))):
+for step in sorted(glob.glob(os.path.join(GEN, "**", "*.step"), recursive=True)):
     s = Part.read(step)
     ok = bool(s.Solids) and s.isValid()
-    print("%-40s solids=%d valid=%s vol=%.0f" % (os.path.basename(step), len(s.Solids), s.isValid(), s.Volume))
+    print("%-60s solids=%d valid=%s vol=%.0f" % (os.path.relpath(step, GEN), len(s.Solids), s.isValid(), s.Volume))
     bad += not ok
 print("verify: %d bad" % bad)
 sys.stdout.flush()          # freecadcmd exits without flushing on sys.exit

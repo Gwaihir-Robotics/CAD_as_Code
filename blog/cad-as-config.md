@@ -177,14 +177,14 @@ The fly winder is built around two HRP85 hollow rotary platforms for the fly and
 
 1. Import the vendor STEP of the HRP85 and **measure it** with the agent: where is the output face, where does the square base end, what's the flange bolt pattern, where is the NEMA23 block. Those numbers went into a memory file and the top of the macro as named constants.
 2. Define the **local frame** for one HRP85 (output axis +Z, flange face Z=0, platform face Z=32.2, base ends Z=11) and never argue about it again.
-3. Ask for **one plate**: a flat sheet, two HRP85s at 180 mm centres, silhouette cutouts so the hollow bore stays open. Verify. Commit.
+3. Ask for **one plate**: a flat sheet, two HRP85s at 180 mm centres, silhouette cutouts so the hollow bore stays open. Verify. Commit. (Parts are built in their own fab frame — plate face = XY — and only the assembly document is re-expressed in the machine frame, +Z up, −Y toward the operator. Getting *that* rotation right took two rounds of "rear should be top".)
 4. Then a bend. Then side plates. Then deck holes. Then the spindle plate. Then linear axes. Each one a small diff on a working generator.
 
-![Fly L-bracket with universal side plates, HRP85s seated in silhouette cutouts (view from inside the box)](img/fly_box_inside.png)
+![Fly wall from behind: HRP85 bodies seated in the silhouette cutouts, universal side plates boxing the L](img/fly_box_inside.png)
 
-![Same assembly from below: the hollow-bore passthrough stays open, output platforms clear the plate](img/fly_box_below.png)
+![Same assembly from the operator side: output platforms through the cutouts, hollow-bore passthrough open](img/fly_box_below.png)
 
-![Flat fly plate, top view — silhouette cutouts sliced from the vendor STEP, tapped M6 pattern, deck-hole columns](img/fly_plate_top.png)
+![Fly plate face-on — silhouette cutouts sliced from the vendor STEP, tapped M6 pattern, deck-hole columns](img/fly_plate_top.png)
 
 The silhouette cutout is a good example of *feeding the agent ground truth instead of a description*. We didn't describe the HRP85 housing; we sliced the vendor STEP at a band of heights, fused the slices, offset by 0.75 mm clearance and cut. When the vendor's geometry is the input, the vendor's geometry is what you get.
 
@@ -201,7 +201,7 @@ def unit_features(hrp, p, style="silhouette"):
 
 ![Spindle side: HRP85s on the spindle plate on two SXG5080 linear axes, riser + arbor stack](img/spindle_stack_iso.png)
 
-![Full positioned assembly with datum lines: fly above, spindles below](img/hrp85_assembly_iso_top.png)
+![Full positioned assembly in the machine frame: fly wall at the rear, spindle base in front pointing back at it, datum lines through the HRP85 axes](img/hrp85_assembly_iso_top.png)
 
 The whole thing — three sheet-metal parts, the assembly with vendor STEPs positioned, STEP exports for the sheet-metal vendor — is one macro of about a thousand lines and a `FLY` / `SPINDLE` / `COMMON` dict at the top. Changing the plate gauge from 4.0 to 4.7 mm when we discovered SendCutSend doesn't stock 4.0 was a one-line diff and a re-run.
 

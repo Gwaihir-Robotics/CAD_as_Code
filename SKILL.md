@@ -1,6 +1,6 @@
 ---
 name: cad-as-code
-description: Build and evolve CAD as version-controlled, parametric FreeCAD generator macros driven by config (YAML / PARAMS dict / spreadsheet), run headless, verified by scripted checks, with regenerable outputs. Load whenever the user asks for a CAD part, fixture, jig, plate, bracket, arbor, or assembly; wants to change a dimension in an existing generator; asks about FreeCAD/OCC scripting; or asks how to make CAD work with a coding agent. Also load before touching any *.FCMacro or generated/ folder.
+description: Build and evolve CAD as version-controlled, parametric FreeCAD generator macros driven by config (YAML / PARAMS dict / spreadsheet), run headless, verified by scripted checks, with regenerable outputs. Load whenever the user asks for a CAD part, fixture, jig, plate, bracket, arbor, or assembly; wants to change a dimension in an existing generator; asks about FreeCAD/OCC scripting; or asks how to make CAD work with a coding agent. Also load before touching any *.FCMacro, output/ or generated/ folder.
 license: MIT
 ---
 
@@ -17,7 +17,7 @@ The pattern is config-as-code borrowed from infrastructure (Kubernetes):
 |---|---|
 | manifest (`deployment.yaml`) | config: YAML file, `PARAMS` dict, or FreeCAD `Params` spreadsheet |
 | controller / reconciler | the generator macro (`*.FCMacro`) |
-| live cluster state | `generated/` (FCStd, STEP, DXF, PNG) — regenerable, never hand-edited |
+| live cluster state | `output/<family>/<SKU>/<rev>/` (FCStd, STEP, DXF, PNG) + `cad-manifest.json` — regenerable, never hand-edited |
 | `kubectl apply` | `freecadcmd macros/Foo.FCMacro` |
 | readiness probe | verification script: residuals, interference, symmetry, clash |
 | CRD | the config keys a generator promises to consume |
@@ -63,7 +63,9 @@ Only then write the generator.
   rather than describing them.
 - Placement: compose (`pose.multiply(obj.Placement)`), never overwrite, for
   imported multi-solid parts.
-- Save `generated/<Name>.FCStd` **and** per-part STEP; write `GuiDocument.xml`
+- Save to `output/<family>/<SKU>/<rev>/`: FCStd **and** one STEP per part
+  (`<id>-<part>.step`) **and** `cad-manifest.json` with the config sha and
+  resolved params (`reference/output-convention.md`). Write `GuiDocument.xml`
   so headless saves open visible. Delete-and-recreate objects; `purgeTouched()`.
 - Follow `reference/occ-workarounds.md` when booleans/offsets/STEP misbehave.
 - Encode DFM as parameters/rules, not prose (`reference/dfm-checklist.md`).
@@ -86,8 +88,8 @@ Map the user's human feedback ("wrong axis", "leg should fold the other way")
 onto parameters. Re-run, re-render, re-check.
 
 ### 5. Commit
-- `generated/` outputs are committed (STEP/FCStd) but never edited; ignore
-  `*.FCStd1`, `*.FCBak`.
+- `output/` is gitignored (reproducible via manifest sha); commit the curated
+  `exports/` (vendor bundles, latest STEP per part). Never hand-edit either.
 - Branch per feature. The PR is the config diff.
 - Update memory with measured datums and any new workaround.
 
@@ -103,6 +105,7 @@ onto parameters. Re-run, re-render, re-check.
 
 ## Bundled references
 - `reference/repo-layout.md` — folder conventions
+- `reference/output-convention.md` — output/<family>/<SKU>/<rev>/, cad-manifest.json, hybrid git policy
 - `reference/config-schema.md` — YAML/PARAMS/spreadsheet conventions, idempotent writers
 - `reference/freecad-headless.md` — freecadcmd, saving, visibility, STEP I/O, spreadsheets, rendering
 - `reference/occ-workarounds.md` — battle-tested fixes for OCC/FreeCAD edge cases

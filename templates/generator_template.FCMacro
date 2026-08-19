@@ -1,0 +1,110 @@
+# -*- coding: utf-8 -*-
+"""
+generator_template.FCMacro — CAD-as-Code skeleton
+=================================================
+Reads a YAML config, builds one part family, verifies, saves FCStd + STEP.
+
+Run headless:
+  /Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd generator_template.FCMacro
+  CONFIG=path/to/other.yaml freecadcmd generator_template.FCMacro
+
+FRAME: part axis = +Z, base disc bottom at Z=0, all dims mm.
+"""
+import os, re, zipfile
+import FreeCAD as App
+import Part
+from FreeCAD import Vector
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CONFIG = os.environ.get("CONFIG", os.path.join(HERE, "config.example.yaml"))
+OUT_DIR = os.environ.get("OUT_DIR", os.path.join(HERE, "generated"))
+DOC_NAME = "Arbor"
+
+# ---------------------------------------------------------------- config
+def load_yaml(path):
+    """Tiny tolerant YAML reader (scalars + one level of nesting). Use PyYAML
+    if available; this keeps the template dependency-free under freecadcmd."""
+    try:
+        import yaml
+        return yaml.safe_load(open(path))
+    except Exception:
+        pass
+    cfg, section = {}, None
+    for line in open(path):
+        line = line.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        m = re.match(r"^(\s*)([A-Za-z_][\w]*):\s*(.*)$", line)
+        if not m:
+            continue
+        indent, key, val = len(m.group(1)), m.group(2), m.group(3).strip()
+        if indent == 0 and val == "":
+            section = key; cfg[section] = {}; continue
+        target = cfg[section] if indent and section else cfg
+        try:
+            val = float(val) if re.match(r"^-?[0-9.]+$", val) else val.strip('"\'')
+        except ValueError:
+            pass
+        target[key] = val
+    return cfg
+
+# ---------------------------------------------------------------- build
+def build_arbor(cfg):
+    a = cfg["arbor"]
+    bore = cfg["inner_diameter"]
+    od = bore - a["fit_clr"]
+    z = 0.0
+    solid = Part.makeCylinder(a["base_disc_dia"] / 2, a["base_disc_t"], Vector(0, 0, z))
+    z += a["base_disc_t"]
+    lip = Part.makeCylinder((bore + a["seat_lip_dia"]) / 2, a["seat_t"], Vector(0, 0, z))
+    z += a["seat_t"]
+    body = Part.makeCylinder(od / 2, cfg["stack_length"], Vector(0, 0, z))
+    z += cfg["stack_length"]
+    solid = solid.fuse(lip).fuse(body).removeSplitter()
+    hole = Part.makeCylinder(a["center_screw"] / 2, z + 2, Vector(0, 0, -1))
+    solid = solid.cut(hole)
+    return solid, dict(arbor_od=od, height=z, hole=hole)
+
+# ---------------------------------------------------------------- verify
+def verify(solid, info, cfg):
+    ok = True
+    res = info["hole"].common(solid).Volume
+    print("  hole residual        %.4f mm^3" % res); ok &= res < 1e-6
+    exp = 3.14159265 * (info["arbor_od"] / 2) ** 2 * cfg["stack_length"]
+    print("  arbor OD             %.3f (bore %.2f - clr)" % (info["arbor_od"], cfg["inner_diameter"]))
+    print("  volume               %.0f mm^3 (body alone ~%.0f)" % (solid.Volume, exp)); ok &= solid.Volume > exp
+    print("  is solid / valid     %s / %s" % (bool(solid.Solids), solid.isValid())); ok &= bool(solid.Solids) and solid.isValid()
+    return ok
+
+# ---------------------------------------------------------------- save
+def write_gui_visibility(fcstd, names):
+    vps = "".join('<ViewProvider name="%s" expanded="0"><Properties Count="1" TransientCount="0">'
+                  '<Property name="Visibility" type="App::PropertyBool"><Bool value="true"/>'
+                  '</Property></Properties></ViewProvider>' % n for n in names)
+    xml = ("<?xml version='1.0' encoding='utf-8'?>\n<Document SchemaVersion=\"1\">"
+           "<ViewProviderData Count=\"%d\">%s</ViewProviderData></Document>\n" % (len(names), vps))
+    with zipfile.ZipFile(fcstd, "a") as z:
+        if "GuiDocument.xml" not in z.namelist():
+            z.writestr("GuiDocument.xml", xml)
+
+def main():
+    cfg = load_yaml(CONFIG)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    doc = App.getDocument(DOC_NAME) if DOC_NAME in App.listDocuments() else App.newDocument(DOC_NAME)
+    for o in list(doc.Objects):
+        doc.removeObject(o.Name)
+    solid, info = build_arbor(cfg)
+    name = "Arbor_%s_L%g" % (cfg.get("name", "X"), cfg["stack_length"])
+    obj = doc.addObject("Part::Feature", name); obj.Shape = solid; obj.Visibility = True
+    doc.recompute()
+    print("%s:" % name)
+    ok = verify(solid, info, cfg)
+    for o in doc.Objects: o.purgeTouched()
+    fcstd = os.path.join(OUT_DIR, DOC_NAME + ".FCStd"); doc.saveAs(fcstd)
+    if not App.GuiUp: write_gui_visibility(fcstd, [o.Name for o in doc.Objects])
+    step = os.path.join(OUT_DIR, name + ".step"); solid.exportStep(step)
+    back = Part.read(step)
+    print("  STEP round-trip      solids=%d dV=%.4f" % (len(back.Solids), abs(back.Volume - solid.Volume)))
+    print("RESULT %s -> %s" % ("PASS" if ok and back.Solids else "FAIL", OUT_DIR))
+
+main()

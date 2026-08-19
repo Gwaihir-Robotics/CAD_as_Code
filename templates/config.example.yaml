@@ -1,0 +1,17 @@
+# Example product config consumed by templates/generator_template.FCMacro
+# units: mm, deg
+name: S60
+outer_diameter: 60.0          # stator OD at tooth tips
+inner_diameter: 36.65         # bore
+stack_length: 20.0            # lamination stack height
+
+# ── Arbor (winding fixture) ──────────────────────────────────────
+# Consumed by generator_template.FCMacro. Namespaced so other tools can
+# extend this file without collisions.
+arbor:
+  fit_clr: 0.04               # diametral clearance arbor OD vs bore
+  seat_lip_dia: 2.0           # seat lip diametral oversize vs bore
+  seat_t: 5.0                 # seat lip thickness
+  base_disc_dia: 22.0         # drops into the riser pocket
+  base_disc_t: 4.0
+  center_screw: 5.0           # Ø through-hole for the centre screw

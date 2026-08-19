@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" font-family="Inter, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a6d3b"/>
+    </marker>
+    <style>
+      .box{fill:#f7f3ea;stroke:#8a6d3b;stroke-width:2;rx:10}
+      .t{font-size:20px;font-weight:600;fill:#1d1d1f}
+      .s{font-size:14px;fill:#444}
+      .k{font-size:13px;fill:#8a6d3b;font-family:"IBM Plex Mono",Menlo,monospace}
+      .arrow{stroke:#8a6d3b;stroke-width:2.5;fill:none;marker-end:url(#a)}
+    </style>
+  </defs>
+  <rect width="1200" height="420" fill="#ffffff"/>
+  <!-- boxes -->
+  <g>
+    <rect class="box" x="30" y="120" width="220" height="130"/>
+    <text class="t" x="140" y="160" text-anchor="middle">Config</text>
+    <text class="s" x="140" y="188" text-anchor="middle">stator_60mm.yaml</text>
+    <text class="s" x="140" y="210" text-anchor="middle">PARAMS / Params sheet</text>
+    <text class="k" x="140" y="238" text-anchor="middle">≈ manifest</text>
+  </g>
+  <g>
+    <rect class="box" x="330" y="120" width="220" height="130"/>
+    <text class="t" x="440" y="160" text-anchor="middle">Generator</text>
+    <text class="s" x="440" y="188" text-anchor="middle">*.FCMacro (Part API)</text>
+    <text class="s" x="440" y="210" text-anchor="middle">freecadcmd, headless</text>
+    <text class="k" x="440" y="238" text-anchor="middle">≈ controller</text>
+  </g>
+  <g>
+    <rect class="box" x="630" y="120" width="220" height="130"/>
+    <text class="t" x="740" y="160" text-anchor="middle">Generated</text>
+    <text class="s" x="740" y="188" text-anchor="middle">FCStd · STEP · DXF · PNG</text>
+    <text class="s" x="740" y="210" text-anchor="middle">never hand-edited</text>
+    <text class="k" x="740" y="238" text-anchor="middle">≈ cluster state</text>
+  </g>
+  <g>
+    <rect class="box" x="930" y="120" width="240" height="130"/>
+    <text class="t" x="1050" y="160" text-anchor="middle">Verify</text>
+    <text class="s" x="1050" y="188" text-anchor="middle">boolean residual = 0.0</text>
+    <text class="s" x="1050" y="210" text-anchor="middle">interference · symmetry · clash</text>
+    <text class="k" x="1050" y="238" text-anchor="middle">≈ readiness probe</text>
+  </g>
+  <!-- arrows -->
+  <path class="arrow" d="M250,185 L330,185"/>
+  <path class="arrow" d="M550,185 L630,185"/>
+  <path class="arrow" d="M850,185 L930,185"/>
+  <!-- feedback loop -->
+  <path class="arrow" d="M1050,250 L1050,320 L140,320 L140,250"/>
+  <text class="s" x="595" y="345" text-anchor="middle">screenshot / check fails → edit the config or the generator, never the output → re-run</text>
+  <!-- git bar -->
+  <rect x="30" y="30" width="1140" height="50" fill="#1d2b3a" rx="10"/>
+  <text x="600" y="62" text-anchor="middle" font-size="18" fill="#f2e6c9" font-weight="600">git — config, generator, and generated outputs are all diffs on one branch</text>
+  <text class="s" x="600" y="400" text-anchor="middle">CAD as Config: declarative desired state → reconciler → materialised parts → checked → committed</text>
+</svg>

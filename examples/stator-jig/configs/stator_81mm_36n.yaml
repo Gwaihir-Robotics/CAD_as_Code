@@ -1,0 +1,18 @@
+# Trimmed from StatorCreator/stator-designer-py/input/stator_81mm_36n_config.yaml
+# units: mm. Only the keys the fixture generators consume are kept.
+
+outer_diameter: 81.0
+inner_diameter: 58.5
+slot_count: 36
+tooth_width: 2.0
+shoe_width: 5.02
+shoe_depth: 2.0
+pins:                         # alignment divots on the OD
+  - angle: 0
+    diameter: 2.0
+  - angle: 180
+    diameter: 2.0
+
+# ── Side wire guides (fly winder) — consumed by SideGuideGenerator.FCMacro
+side_guide:
+  tip_gap: 6.02

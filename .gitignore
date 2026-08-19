@@ -1,0 +1,7 @@
+*.FCStd1
+*.FCBak
+*.FCStd.*
+.DS_Store
+__pycache__/
+templates/generated/
+examples/*/generated/

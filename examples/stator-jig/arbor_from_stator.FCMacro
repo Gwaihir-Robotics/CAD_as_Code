@@ -1,0 +1,29 @@
+# -*- coding: utf-8 -*-
+"""arbor_from_stator.FCMacro — run the template generator against a trimmed
+stator config, supplying the arbor block the config doesn't carry.
+
+  CONFIG=configs/stator_60mm_24n.yaml OUT_DIR=generated freecadcmd arbor_from_stator.FCMacro
+"""
+import os, re
+HERE = os.path.dirname(os.path.abspath(__file__))
+TEMPLATE = os.path.join(HERE, "..", "..", "templates", "generator_template.FCMacro")
+cfg_path = os.environ.get("CONFIG", os.path.join(HERE, "configs", "stator_60mm_24n.yaml"))
+
+# stator configs name themselves by OD; derive name + defaults the template needs
+src = open(cfg_path).read()
+od = float(re.search(r"^outer_diameter:\s*([0-9.]+)", src, re.M).group(1))
+merged = os.path.join(os.environ.get("OUT_DIR", os.path.join(HERE, "generated")), "_merged.yaml")
+os.makedirs(os.path.dirname(merged), exist_ok=True)
+open(merged, "w").write(src + """
+name: S%d
+stack_length: 20.0
+arbor:
+  fit_clr: 0.04
+  seat_lip_dia: 2.0
+  seat_t: 5.0
+  base_disc_dia: %s
+  base_disc_t: 4.0
+  center_screw: 5.0
+""" % (round(od), 19.0 if od < 40 else 22.0))
+os.environ["CONFIG"] = merged
+exec(compile(open(TEMPLATE).read(), TEMPLATE, "exec"), {"__file__": TEMPLATE, "__name__": "__main__"})

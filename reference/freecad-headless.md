@@ -90,3 +90,27 @@ Toggle `obj.ViewObject.Visibility` to isolate parts. FreeCAD's stock
 ## Gotcha: `sys.exit()` swallows your output
 `freecadcmd` exits without flushing stdout when a macro calls `sys.exit()`.
 Call `sys.stdout.flush()` first (or avoid `sys.exit` and print a `RESULT` line).
+
+## Saved camera: make the file open fit-all, oriented
+A headless-saved FCStd opens with FreeCAD's default camera. Bake one into the
+same `GuiDocument.xml` you write for visibility. FreeCAD only honours its own
+format — the `<Camera>` element goes **after** `</ViewProviderData>` and the
+settings string uses `&#10;` for newlines (a plausible-but-different layout is
+silently ignored; capture a GUI-saved file's XML if in doubt):
+```python
+c = scene_bb_centre; d = Vector(1, -1, 1); d.normalize()      # front-right-top, Z up
+up = Vector(0, 0, 1); cx = up.cross(d); cx.normalize(); cy = d.cross(cx)
+rot = App.Rotation(App.Matrix(cx.x, cy.x, d.x, 0, cx.y, cy.y, d.y, 0,
+                              cx.z, cy.z, d.z, 0, 0, 0, 0, 1))
+height = max(extent_along(cx), extent_along(cy)) * 1.1        # ortho fit
+dist = bb.DiagonalLength; pos = c + d * dist
+cam = ('<Camera settings="OrthographicCamera {&#10;  viewportMapping ADJUST_CAMERA&#10;'
+       '  position %.5f %.5f %.5f&#10;  orientation %.8f %.8f %.8f  %.7f&#10;'
+       '  nearDistance %.5f&#10;  farDistance %.5f&#10;  aspectRatio 1&#10;'
+       '  focalDistance %.5f&#10;  height %.5f&#10;&#10;}&#10;"/>'
+       % (pos.x, pos.y, pos.z, rot.Axis.x, rot.Axis.y, rot.Axis.z, rot.Angle,
+          dist * 0.4, dist * 1.6, dist, height))
+xml = '...<ViewProviderData ...>...</ViewProviderData>%s</Document>' % cam
+```
+Sanity check: direction (1,−1,1) with Z up must produce orientation
+`0.7429 0.3077 0.5945 @ 1.2171` — FreeCAD's own isometric.

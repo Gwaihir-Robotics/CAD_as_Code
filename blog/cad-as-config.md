@@ -62,10 +62,10 @@ The point of the analogy isn't cleverness. It's that the discipline it imposes �
 
 ## 3. The worked example: one stator YAML, four downstream parts
 
-We make BLDC stators — S32 through S100 in the current lineup — and we build our own tooling to wind, coat and handle them. Every piece of that tooling depends on the *same* few numbers about the stator: outer diameter, bore, slot count, tooth shoe width. So that's where the config lives: one YAML per stator SKU, in the [StatorCreator](https://github.com/Gwaihir-Robotics/StatorCreator) repo. Trimmed to what matters for this post:
+We make BLDC stators — S32 through S100 in the current lineup — and we build our own tooling to wind, coat and handle them. Every piece of that tooling depends on the *same* few numbers about the stator: outer diameter, bore, slot count, tooth shoe width. So that's where the config lives: one YAML per stator SKU, in our stator-design repo. Trimmed to what matters for this post:
 
 ```yaml
-# stator-designer-py/input/stator_60mm_24n_config.yaml (excerpt)
+# input/stator_60mm_24n_config.yaml (excerpt)
 outer_diameter: 60.0          # OD at tooth tips
 inner_diameter: 36.65         # bore
 slot_count: 24
@@ -82,7 +82,7 @@ pins:                         # alignment divots on the OD
     diameter: 1.5
 
 # ── Side Wire Guides (fly winder) ─
-# Consumed by fly-winder/macros/SideGuideGenerator.FCMacro.
+# Consumed by macros/SideGuideGenerator.FCMacro.
 # tip_gap: total opening between the two guide-wing tips - the
 # funnel the fly lays wire through. Default shoe_width + 1.0.
 side_guide:

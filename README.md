@@ -55,13 +55,5 @@ examples/stator-jig/        trimmed real stator configs + arbor runner
 blog/                       the post and its (regenerable) images
 ```
 
-## Where the real generators live
-
-- `Gwaihir-Robotics/fly-winder` — `HRP85_PlateGenerator`, `SideGuideGenerator`,
-  `ArborGenerator_v4`, `tools/render_views.FCMacro`
-- `Gwaihir-Robotics/coatingmachine-hardware` — `StatorJigGenerator`,
-  `CorkscrewGenerator`, `VatGenerator`
-- `Gwaihir-Robotics/StatorCreator` — the stator YAML lineup + `stator_gen.py`
-
 MIT licensed. Issues and PRs welcome — especially new OCC workarounds with a
 reproducer.

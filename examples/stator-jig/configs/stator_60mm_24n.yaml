@@ -1,4 +1,4 @@
-# Trimmed from StatorCreator/stator-designer-py/input/stator_60mm_24n_config.yaml
+# Trimmed from our internal stator config stator_60mm_24n_config.yaml
 # units: mm. Only the keys the fixture generators consume are kept.
 
 outer_diameter: 60.0

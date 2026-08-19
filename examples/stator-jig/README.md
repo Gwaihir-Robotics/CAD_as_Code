@@ -18,9 +18,7 @@ Arbor_S60_L20:
 RESULT PASS -> generated
 ```
 
-The production versions of this idea (riser + arbor family for every SKU and
-stack length, real divot clocking, DXF overlay, spreadsheet params) live in
-`Gwaihir-Robotics/fly-winder` (`macros/ArborGenerator_v4.FCMacro`); the wire
-guides in `SideGuideGenerator.FCMacro`; the coating jig in
-`Gwaihir-Robotics/coatingmachine-hardware` (`StatorFixtures/StatorJigGenerator.FCMacro`).
-The blog post in `../../blog/` walks through all four.
+Our production versions of this idea (riser + arbor family for every SKU and
+stack length, real divot clocking, DXF overlay, spreadsheet params; the wire
+guides; the coating jig) are internal, but the blog post in `../../blog/`
+walks through all four in detail.

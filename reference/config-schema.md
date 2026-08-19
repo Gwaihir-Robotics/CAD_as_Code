@@ -17,7 +17,7 @@ inner_diameter: 36.65         # bore
 slot_count: 24
 
 # ── Side wire guides (fly winder) ────────────────
-# Consumed by fly-winder/macros/SideGuideGenerator.FCMacro.
+# Consumed by macros/SideGuideGenerator.FCMacro.
 # tip_gap: opening between the guide-wing tips. Default shoe_width + 1.0.
 side_guide:
   tip_gap: 6.00

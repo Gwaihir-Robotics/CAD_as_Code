@@ -1,7 +1,7 @@
 # OCC / FreeCAD workarounds we paid for
 
-All of these live in production generators (fly-winder `HRP85_PlateGenerator`,
-`SideGuideGenerator`, epoxy `StatorJigGenerator`). Copy, don't rediscover.
+All of these came out of production generators (machine plates, wire guides,
+coating jigs). Copy, don't rediscover.
 
 ## 1. Silhouette from a vendor STEP: slice, flatten, fuse
 Slices at different Z produce disjoint stacked faces that won't fuse. Translate

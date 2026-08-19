@@ -49,7 +49,7 @@ The parallel to CAD is almost one-to-one:
 |---|---|
 | Manifest (`deployment.yaml`) | Config (`stator_60mm.yaml`, a `PARAMS` dict, a `Params` spreadsheet) |
 | Controller / reconciler | Generator macro (`ArborGenerator_v4.FCMacro`, `HRP85_PlateGenerator.FCMacro`) |
-| Live cluster state | `generated/` — FCStd, STEP, DXF, PNG. Regenerable, never hand-edited |
+| Live cluster state | `output/<family>/<SKU>/<rev>/` — FCStd, STEP, DXF, PNG + a manifest. Regenerable, never hand-edited |
 | `kubectl apply` | `freecadcmd macros/Foo.FCMacro` (headless) |
 | Readiness / liveness probes | Verification scripts: boolean residual, interference, symmetry, fixture clash |
 | CRD schema | The YAML keys a generator promises to consume (`outer_diameter`, `side_guide.tip_gap`, …) |

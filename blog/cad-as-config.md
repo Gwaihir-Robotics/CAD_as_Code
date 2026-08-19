@@ -100,6 +100,7 @@ A plain Python script (no FreeCAD needed) reads the YAML and emits DXF + SVG for
 ![Dimensioned lamination drawing for the 81 mm / 36-slot stator, generated straight from its YAML](img/stator_81mm_dims.png)
 
 ```sh
+# stator_gen.py — regenerate DXF/SVG + dimensioned drawing from the YAML
 uv run python stator_gen.py -c input/stator_81mm_36n_config.yaml -f both
 ```
 
@@ -114,6 +115,7 @@ The stator sits on an arbor during winding; the arbor sits in a riser; the riser
 Parameters here live in a FreeCAD `Params` spreadsheet the macro creates on first run — globals at the top (HRP85 table OD, bore, bolt circle, riser height, cup interface diameters, `build` selector) and a per-stator table below. Same idea as the YAML; the spreadsheet is just a config format that's editable inside FreeCAD by someone who doesn't want to open a text editor.
 
 ```python
+# macros/ArborGenerator_v4.FCMacro — Params spreadsheet defaults (excerpt)
 GLOBALS = [
     ("hrp_table_od",      70.00, "HRP85 output table OD (0/-0.02)"),
     ("hrp_bore",          33.00, "HRP85 hollow bore"),
@@ -139,6 +141,7 @@ The fly winder lays wire past the stator through a funnel formed by two guide wi
 The YAML reader is deliberately boring — a regex over a handful of keys, tolerant of everything else in the file — because a generator should never be the thing that breaks when someone adds a winding pattern to the stator config:
 
 ```python
+# macros/SideGuideGenerator.FCMacro — tolerant YAML reader
 def scan_yaml_dir():
     rows = []
     pat = re.compile(r"^\s*(outer_diameter|slot_count|shoe_width|tip_gap)"
@@ -189,6 +192,7 @@ The fly winder is built around two HRP85 hollow rotary platforms for the fly and
 The silhouette cutout is a good example of *feeding the agent ground truth instead of a description*. We didn't describe the HRP85 housing; we sliced the vendor STEP at a band of heights, fused the slices, offset by 0.75 mm clearance and cut. When the vendor's geometry is the input, the vendor's geometry is what you get.
 
 ```python
+# macros/HRP85_PlateGenerator.FCMacro — pocket profile sliced from the vendor STEP
 def unit_features(hrp, p, style="silhouette"):
     z0 = p["flange_stop_z"] + 0.2                # just past the square base
     band = (z0, min(21.8, z0 + p["plate_thickness"]))
@@ -245,7 +249,8 @@ When the guide generator needed a per-SKU funnel width, the right move was `side
 
 None of this survives without a little structure. Ours, per project:
 
-```
+```text
+# repo layout (fly/)
 fly/
   macros/            *.FCMacro generators (the source of truth)
   configs/           YAML the generators read (or a shared product repo)
@@ -280,6 +285,7 @@ Being authoritative means being honest about the potholes.
 **Hidden objects in headless saves.** An FCStd saved from `freecadcmd` has no `GuiDocument.xml`, so the GUI opens it with everything invisible and a "recompute?" prompt. Twelve lines write a minimal one into the zip and the file opens clean. Every headless generator we have now carries this.
 
 ```python
+# macros/HRP85_PlateGenerator.FCMacro — make headless saves open visible
 if not App.GuiUp:
     vps = "".join('<ViewProvider name="%s" expanded="0"><Properties Count="1" '
                   'TransientCount="0"><Property name="Visibility" '

@@ -1,7 +1,9 @@
+# generated artifacts are never committed from this repo (see reference/output-convention.md)
+output/
+generated/
+exports/
 *.FCStd1
 *.FCBak
 *.FCStd.*
 .DS_Store
 __pycache__/
-templates/generated/
-examples/*/generated/

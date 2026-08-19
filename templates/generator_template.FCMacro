@@ -27,6 +27,14 @@ EXPORT_DIR = os.environ.get("EXPORT_DIR", "")          # "" = don't refresh expo
 FAMILY = "arbor"
 DOC_NAME = "Arbor"
 
+def safe_relpath(path):
+    """Path for manifests: relative to the generator's project dir when the
+    file lives inside it, otherwise just the basename. Never let a manifest
+    carry '..' hops or absolute paths from the machine that generated it."""
+    root = os.path.abspath(os.path.dirname(HERE))
+    ap = os.path.abspath(path)
+    return os.path.relpath(ap, root) if ap.startswith(root + os.sep) else os.path.basename(ap)
+
 def sha12(path):
     return hashlib.sha256(open(path, "rb").read()).hexdigest()[:12]
 
@@ -140,7 +148,7 @@ def main():
     manifest = {
         "format": "cad-manifest", "schemaVersion": 1,
         "design": "%s@%s" % (ident, config_sha),
-        "config_sha": config_sha, "config_path": os.path.relpath(CONFIG),
+        "config_sha": config_sha, "config_path": safe_relpath(CONFIG),
         "generator": "%s@%s" % (os.path.basename(__file__), sha12(__file__)),
         "units": "mm",
         "params": {"arbor_od": round(info["arbor_od"], 3), "height": round(info["height"], 3),

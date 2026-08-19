@@ -40,7 +40,10 @@ exports/                    CURATED, COMMITTED: vendor bundles + latest STEP per
   "generated_at": "2026-08-19T03:31:02Z"
 }
 ```
-Same config + same generator ⇒ same `design` string ⇒ same geometry. That is
+`config_path` is relative to the project root, or a bare basename if the
+config lives elsewhere — a manifest must never carry absolute paths or `..`
+hops from the machine that generated it (they leak usernames and layouts
+into public repos). Same config + same generator ⇒ same `design` string ⇒ same geometry. That is
 the reproducibility contract; it is what lets `output/` be gitignored.
 
 ## Git policy (hybrid)

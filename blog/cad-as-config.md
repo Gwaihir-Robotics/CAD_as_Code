@@ -248,18 +248,21 @@ None of this survives without a little structure. Ours, per project:
 ```
 fly/
   macros/            *.FCMacro generators (the source of truth)
+  configs/           YAML the generators read (or a shared product repo)
   docs/              notes, DFM decisions, commercial references, img/
   external_imports/  vendor STEPs (HRP85, SXG5080, MGN9H) — never edited
-  generated/         FCStd / STEP / DXF the macros write — never hand-edited
-  exports/           vendor bundles (SendCutSend zip with qty in filenames)
+  output/            what the macros write — gitignored, regenerable:
+    <family>/<SKU>/<rev>/   cad-manifest.json, <id>.FCStd, step/<id>-<part>.step
+  exports/           curated + committed: vendor bundles, latest STEP per part
   tools/             render_views.FCMacro and other non-geometry helpers
   README.md          how to regenerate, in one line
 ```
 
 Rules we hold to:
 
-- **`generated/` is disposable.** If it's wrong, fix the macro or the config and re-run. Hand-editing a generated FCStd is the CAD equivalent of `kubectl edit` in prod — it works until the next apply.
-- **Commit the outputs anyway** (STEP, FCStd; ignore `.FCStd1` backups). A collaborator without FreeCAD should still be able to open the STEP, and a diff on the STEP is a cheap regression signal.
+- **`output/` is disposable.** If it's wrong, fix the macro or the config and re-run. Hand-editing a generated FCStd is the CAD equivalent of `kubectl edit` in prod — it works until the next apply.
+- **Every revision folder carries a manifest.** `cad-manifest.json` records `design: "<id>@<config-sha>"`, the generator's sha, the resolved parameters actually used, and the check results. Same config + same generator ⇒ same design string ⇒ same geometry — that's the reproducibility contract that lets `output/` stay out of git. A new `rNNN` is allocated only when the config sha changes.
+- **Commit a curated `exports/` anyway** (vendor bundles, the latest STEP per part, the manifest that produced them) so a collaborator without FreeCAD still gets files, and a STEP diff stays a cheap regression signal. Refresh it by copying from the current rev — never by hand.
 - **Headless by default.** `freecadcmd macro.FCMacro` in a shell means the agent can run the generator itself, read the console, and iterate without a human clicking Run. Every macro also works from the GUI's macro menu.
 - **One branch per feature, PR review = read the config diff.** Reviewing `deck_hole_xs = (-215, -70, 70, 215)` is a lot faster than reviewing a screenshot.
 - **Memory for the agent.** The measured HRP85 datums, the OCC workarounds, "close and reopen the FCStd after regenerating or FreeCAD shows the stale one" — these live in the agent's project memory so the next session doesn't rediscover them.

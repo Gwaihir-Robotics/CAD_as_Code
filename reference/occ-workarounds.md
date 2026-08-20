@@ -93,3 +93,25 @@ with a symmetry residual (see verification.md).
 ## 10. Group visibility in FreeCAD 1.x
 Hiding a `DocumentObjectGroup` hides children. When isolating parts for a
 render, set visibility on the leaves after the groups.
+
+## 11. transformGeometry SHEARS booleaned shapes
+`shape.transformGeometry(matrix)` on a fused/cut solid can shear it — the
+tell is a bounding box √3× wider than expected. Use `Shape.translate()` /
+`rotate()` instead, and bake nothing.
+
+## 12. Feature placement after `obj.Shape = shape`
+Assigning a shape whose internal Placement is set (e.g. after `translate()`)
+MIRRORS that placement into `obj.Placement`. Overwriting it (`.Base = …`)
+un-poses the part; composing (`pl.multiply(obj.Placement)`) doubles it.
+Leave it untouched; apply layout offsets relatively: `obj.Placement.move(v)`.
+
+## 13. Real timing-gear teeth (FCGear) you can drill
+Create the feature, copy the Shape, delete the feature; all machining as Part
+booleans on the copy — PartDesign pockets on gear features misbehave:
+```python
+from freecad.gears.commands import CreateTimingGear
+gf = CreateTimingGear.create(); gf.type = "htd5"; gf.num_teeth = 44; gf.height = 16.5
+doc.recompute(); gear = gf.Shape.copy(); doc.removeObject(gf.Name)
+gear = gear.cut(bore).cut(holes)     # safe
+```
+Types: gt2 gt3 gt5 gt8 htd3 htd5 htd8.

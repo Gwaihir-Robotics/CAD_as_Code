@@ -1,6 +1,6 @@
 ---
 name: cad-as-code
-description: Build and evolve CAD as version-controlled, parametric FreeCAD generator macros driven by config (YAML / PARAMS dict / spreadsheet), run headless, verified by scripted checks, with regenerable outputs. Load whenever the user asks for a CAD part, fixture, jig, plate, bracket, arbor, or assembly; wants to change a dimension in an existing generator; asks about FreeCAD/OCC scripting; or asks how to make CAD work with a coding agent. Also load before touching any *.FCMacro, output/ or generated/ folder.
+description: Build and evolve CAD as version-controlled, parametric FreeCAD generator macros driven by config (YAML / PARAMS dict / spreadsheet), run headless, verified by scripted checks, with regenerable outputs. Load whenever the user asks for a CAD part, fixture, jig, plate, bracket, arbor, or assembly; wants to change a dimension in an existing generator; asks about FreeCAD/OCC scripting; asks how to make CAD work with a coding agent; or wants simplified machine envelopes for factory layout, access clearances, or material-flow interfaces. Also load before touching any *.FCMacro, output/ or generated/ folder.
 license: MIT
 ---
 
@@ -87,6 +87,14 @@ Render (`render_views.FCMacro`-style GUI macro, or `saveImage`) and look.
 Map the user's human feedback ("wrong axis", "leg should fold the other way")
 onto parameters. Re-run, re-render, re-check.
 
+### Factory-layout exports (when relevant)
+For machine placement, floor plans, service space or material-flow integration,
+export a lightweight envelope alongside the detailed CAD. Read
+[reference/envelope-exports.md](reference/envelope-exports.md): derive conservative
+solids from verified geometry/config, keep equipment and clearance volumes
+separate, preserve units/origin and flow datums, and label unselected interfaces.
+This is an optional output mode for assemblies, not a requirement for every part.
+
 ### 5. Commit
 - `output/` is gitignored (reproducible via manifest sha); commit the curated
   `exports/` (vendor bundles, latest STEP per part). Never hand-edit either.
@@ -105,6 +113,7 @@ onto parameters. Re-run, re-render, re-check.
 
 ## Bundled references
 - `reference/repo-layout.md` — folder conventions
+- `reference/envelope-exports.md` — lightweight machine/site STEP, layered floor-plan DXF, flow datums and containment checks
 - `reference/output-convention.md` — output/<family>/<SKU>/<rev>/, cad-manifest.json, hybrid git policy
 - `reference/config-schema.md` — YAML/PARAMS/spreadsheet conventions, idempotent writers
 - `reference/freecad-headless.md` — freecadcmd, saving, visibility, STEP I/O, spreadsheets, rendering

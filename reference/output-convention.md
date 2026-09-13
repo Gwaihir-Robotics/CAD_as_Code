@@ -60,3 +60,13 @@ the reproducibility contract; it is what lets `output/` be gitignored.
 `templates/generator_template.FCMacro` implements all of this: rev allocation
 by `config_sha`, `<id>-<part>.step` naming, manifest with resolved params and
 check results, optional `EXPORT_DIR` copy of the latest STEPs.
+
+## Lightweight layout variants
+
+For factory placement, use a separate `factory-envelope` artifact family or a
+namespaced envelope output mode. Keep its export revision and source assembly
+revision in the manifest. Equipment, service, ancillary and transport STEP files
+must identify their different meanings; include units, origin, flow datums and
+source hashes. See [envelope-exports.md](envelope-exports.md) for containment and
+DXF round-trip checks. Do not replace the detailed mechanical output with an
+envelope intended for floor planning.

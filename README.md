@@ -45,6 +45,7 @@ reference/
   freecad-headless.md       freecadcmd, saving, GuiDocument.xml, STEP I/O, rendering
   occ-workarounds.md        slice/fuse silhouettes, offsets, slots, cleaned_solid, placement…
   verification.md           residual / interference / symmetry / hole audit / clash / round-trip
+  envelope-exports.md       lightweight factory STEP, layered floor plans, flow datums and clearances
   dfm-checklist.md          sheet metal, casting, machined, fixtures, interchangeability
 templates/
   generator_template.FCMacro  config → build → verify → FCStd + STEP (+ visibility fix)

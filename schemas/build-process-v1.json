@@ -1,0 +1,663 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "product": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+    },
+    "variant": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^r[0-9]{3,}$"
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "reviewed",
+        "released"
+      ]
+    },
+    "baseline": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cad_source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^(?!/)(?!.*\\.\\.).+"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "sha256"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "parts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "part",
+              "hardware"
+            ]
+          },
+          "spec": {
+            "type": "object",
+            "properties": {
+              "diameter_mm": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "length_mm": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "head_diameter_mm": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "head_height_mm": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "role": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "diameter_mm",
+              "length_mm",
+              "head_diameter_mm",
+              "head_height_mm",
+              "role"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "kind"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "instances": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "part": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "cad_object": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "member": {
+            "type": "object",
+            "properties": {
+              "length_mm": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "orientation": {
+                "enum": [
+                  "X",
+                  "Y",
+                  "Z"
+                ]
+              },
+              "datum": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+              }
+            },
+            "required": [
+              "length_mm",
+              "orientation",
+              "datum"
+            ],
+            "additionalProperties": false
+          },
+          "placement": {
+            "type": "object",
+            "properties": {
+              "seat_mm": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "axis": {
+                "const": [
+                  1,
+                  0,
+                  0
+                ]
+              },
+              "target_object": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+              },
+              "target_radius_mm": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "verification": {
+                "enum": [
+                  "cad_axis_verified",
+                  "candidate_requires_received_check"
+                ]
+              },
+              "datum": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+              }
+            },
+            "required": [
+              "seat_mm",
+              "axis",
+              "target_object",
+              "target_radius_mm",
+              "verification",
+              "datum"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "part"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "datums": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "description"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": [
+              "draft",
+              "reviewed",
+              "released"
+            ]
+          },
+          "subassembly": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "assignable": {
+            "type": "boolean"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "subassembly",
+          "assignable"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "package": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "prerequisites": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+            }
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "starting_condition": {
+            "type": "string",
+            "minLength": 1
+          },
+          "install": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+            }
+          },
+          "uses": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+            }
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "consumables": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "instructions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "acceptance": {
+                  "enum": [
+                    "hold_pending_engineering",
+                    "record_observation"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "text",
+                "acceptance"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "holds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+            }
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+            }
+          },
+          "view": {
+            "type": "object",
+            "properties": {
+              "direction": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "offsets_mm": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                }
+              },
+              "caption": {
+                "type": "string",
+                "minLength": 1
+              },
+              "section": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "normal",
+                  "offset_mm"
+                ],
+                "properties": {
+                  "normal": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "minItems": 3,
+                    "maxItems": 3
+                  },
+                  "offset_mm": {
+                    "type": "number"
+                  }
+                }
+              },
+              "callout_numbers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "required": [
+              "direction",
+              "offsets_mm",
+              "caption"
+            ],
+            "additionalProperties": false
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "uses",
+                "view"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "uses": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "view": {
+                  "type": "object",
+                  "properties": {
+                    "direction": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "minItems": 3,
+                      "maxItems": 3
+                    },
+                    "offsets_mm": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                      }
+                    },
+                    "caption": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "section": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "normal",
+                        "offset_mm"
+                      ],
+                      "properties": {
+                        "normal": {
+                          "type": "array",
+                          "items": {
+                            "type": "number"
+                          },
+                          "minItems": 3,
+                          "maxItems": 3
+                        },
+                        "offset_mm": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "callout_numbers": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "integer",
+                        "minimum": 1
+                      }
+                    },
+                    "crop_box_mm": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "minItems": 6,
+                      "maxItems": 6,
+                      "description": "Presentation-only world-space crop: xmin,ymin,zmin,xmax,ymax,zmax. Tessellated from copied CAD at 0.05 mm deflection."
+                    }
+                  },
+                  "required": [
+                    "direction",
+                    "offsets_mm",
+                    "caption"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "package",
+          "prerequisites",
+          "kind",
+          "starting_condition",
+          "install",
+          "uses",
+          "tools",
+          "consumables",
+          "instructions",
+          "checks",
+          "holds",
+          "sources",
+          "view"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "mandatory": {
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "resolved"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "source",
+          "mandatory",
+          "status"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "bom_scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "bom": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "part": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reference_only": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "part",
+          "quantity",
+          "reference_only"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "callout_style": {
+      "enum": [
+        "per_instance",
+        "grouped_by_part"
+      ],
+      "description": "Bubble numbers for individual instances or common part numbers with location suffixes."
+    }
+  },
+  "required": [
+    "schema_version",
+    "product",
+    "variant",
+    "revision",
+    "status",
+    "baseline",
+    "cad_source",
+    "sources",
+    "parts",
+    "instances",
+    "datums",
+    "packages",
+    "operations",
+    "requirements",
+    "bom_scope",
+    "bom"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Build process v1"
+}

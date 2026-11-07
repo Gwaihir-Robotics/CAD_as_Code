@@ -1,0 +1,67 @@
+{
+  "instruction_sha256": "99b925898cad08bf4b8157d9752cc2c31069d09ba4f8fef7ef2c7a97044d9e13",
+  "format": "webp",
+  "quality": 80,
+  "method": 6,
+  "images": [
+    {
+      "file": "instruction-step-640.webp",
+      "width": 640,
+      "height": 480,
+      "bytes": 18028,
+      "sha256": "95fc3bfd907d4ad378de5047903c4c76970bde31ce54caa1c968d9377b444a66"
+    },
+    {
+      "file": "instruction-step-1040.webp",
+      "width": 1040,
+      "height": 780,
+      "bytes": 37956,
+      "sha256": "bbc8b6975213cf495b80184da1d8792e34044b0efebcf028cad18021b98a51b7"
+    },
+    {
+      "file": "grouped-fasteners-640.webp",
+      "width": 640,
+      "height": 369,
+      "bytes": 9128,
+      "sha256": "d059a4d9adf6524ad0b42a94c35f86e900e31e0f5825c6c75ec7e23dcd2d11c6"
+    },
+    {
+      "file": "grouped-fasteners-1040.webp",
+      "width": 1040,
+      "height": 600,
+      "bytes": 19508,
+      "sha256": "fc7721c29d65509a96e30df60c0e97ea5ff51c18b36057d64a466e063bbbea96"
+    },
+    {
+      "file": "dogbone-receiver-640.webp",
+      "width": 640,
+      "height": 369,
+      "bytes": 3294,
+      "sha256": "55535390fa6c898ed3f6ab612cd0cc55083302c18fbc91bb206a868ab854b5b8"
+    },
+    {
+      "file": "dogbone-receiver-1040.webp",
+      "width": 1040,
+      "height": 600,
+      "bytes": 6770,
+      "sha256": "2d72348e36c6b098486aa12f8dc6f48f21684697236e82ddfae7202fd04216a2"
+    },
+    {
+      "file": "dogbone-corner-640.webp",
+      "width": 640,
+      "height": 369,
+      "bytes": 5934,
+      "sha256": "0272129801e642a750cf05274938ea09a85ffc9433096a9ac8bc01efa4c53d3d"
+    },
+    {
+      "file": "dogbone-corner-1040.webp",
+      "width": 1040,
+      "height": 600,
+      "bytes": 12418,
+      "sha256": "4ab141d0a132e8804c61a743ebba76b2d6dd1d984e54ed95486a5024219eeb7b"
+    }
+  ],
+  "social_image_bytes": 127271,
+  "largest_page_image_set_bytes": 76652,
+  "mobile_image_set_bytes": 36384
+}

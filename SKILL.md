@@ -1,6 +1,6 @@
 ---
 name: cad-as-code
-description: Build and evolve CAD as version-controlled, parametric FreeCAD generator macros driven by config (YAML / PARAMS dict / spreadsheet), run headless, verified by scripted checks, with regenerable outputs. Load whenever the user asks for a CAD part, fixture, jig, plate, bracket, arbor, or assembly; wants to change a dimension in an existing generator; asks about FreeCAD/OCC scripting; asks how to make CAD work with a coding agent; or wants simplified machine envelopes for factory layout, access clearances, or material-flow interfaces. Also load before touching any *.FCMacro, output/ or generated/ folder.
+description: Build and evolve CAD as version-controlled, parametric FreeCAD generator macros driven by config (YAML / PARAMS dict / spreadsheet), run headless, verified by scripted checks, with regenerable outputs. Load whenever the user asks for a CAD part, fixture, jig, plate, bracket, arbor, or assembly; wants to change a dimension in an existing generator; asks about FreeCAD/OCC scripting; asks how to make CAD work with a coding agent; or wants simplified machine envelopes for factory layout, access clearances, or material-flow interfaces. Also load for config-driven SVG electrical/component visualizations of industrial machinery (PLC/control panels, drives, field I/O and machine utilities), not general electronics or PCB design. Also load before touching any *.FCMacro, output/ or generated/ folder.
 license: MIT
 ---
 
@@ -21,6 +21,15 @@ The pattern is config-as-code borrowed from infrastructure (Kubernetes):
 | `kubectl apply` | `freecadcmd macros/Foo.FCMacro` |
 | readiness probe | verification script: residuals, interference, symmetry, clash |
 | CRD | the config keys a generator promises to consume |
+
+## Opening an existing model
+
+For requests such as "show me the assembly in FreeCAD" or "open the model",
+open the existing `.FCStd` directly with the operating system's file launcher.
+On macOS, use `open -a FreeCAD "/absolute/path/to/model.FCStd"`.
+Use its saved view; do not invoke Computer Use, rebuild the model, or run the
+modeling workflow just to display a file. Reserve Computer Use for requested UI
+interaction that cannot be handled through FreeCAD's CLI or macros.
 
 ## The one rule you must say out loud
 
@@ -95,6 +104,26 @@ solids from verified geometry/config, keep equipment and clearance volumes
 separate, preserve units/origin and flow datums, and label unselected interfaces.
 This is an optional output mode for assemblies, not a requirement for every part.
 
+### Industrial electrical visualization (when relevant)
+For an industrial machine's PLC/control panel, drives, field I/O, power paths or
+machine utilities, read
+[reference/industrial-electrical-svg.md](reference/industrial-electrical-svg.md).
+Generate a config-driven SVG component view with optional offline HTML layer
+controls, using the project's component tags and electrical relationships.
+Preserve existing schematics; keep selections and proprietary artifacts in the
+project. This mode complements mechanical CAD and uses topology/SVG/browser
+checks rather than FreeCAD solid checks. It does not cover general electronics
+or PCB design.
+
+### Illustrated work instructions (when relevant)
+For assembly, weldment fabrication or BOM-linked visual work packages, read
+[reference/work-instructions.md](reference/work-instructions.md). Keep authored
+process definitions in the consuming project; use the reusable schema/compiler
+here. Pin exact source content, separate part numbers from installed instances,
+preserve immutable instruction revisions and build records, and retain unknown
+manufacturing requirements as release-blocking holds. CAD validity alone does
+not release a fabrication procedure.
+
 ### 5. Commit
 - `output/` is gitignored (reproducible via manifest sha); commit the curated
   `exports/` (vendor bundles, latest STEP per part). Never hand-edit either.
@@ -113,6 +142,7 @@ This is an optional output mode for assemblies, not a requirement for every part
 
 ## Bundled references
 - `reference/repo-layout.md` — folder conventions
+- `reference/industrial-electrical-svg.md` — industrial machine power/control topology, layered SVG reviews and verification
 - `reference/envelope-exports.md` — lightweight machine/site STEP, layered floor-plan DXF, flow datums and containment checks
 - `reference/output-convention.md` — output/<family>/<SKU>/<rev>/, cad-manifest.json, hybrid git policy
 - `reference/config-schema.md` — YAML/PARAMS/spreadsheet conventions, idempotent writers

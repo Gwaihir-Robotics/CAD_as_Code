@@ -1,0 +1,1093 @@
+# -*- coding: utf-8 -*-
+"""
+razor_head.FCMacro — safety razor head generator (CAD as Code)
+==============================================================
+Reads config.yaml, builds the top cap and one baseplate (one shave tier, one
+process), measures them against the definitions in brief.md, and saves
+FCStd + STEP (+ 3MF for the prototype).
+
+Run headless:
+  ./run.sh                          # tier and process from config.yaml
+  TIER=medium ./run.sh              # mild | medium | med_aggr | all
+  PROCESS=production ./run.sh       # prototype | production
+  EXPORT_DIR=exports ./run.sh       # also refresh curated exports (PASS only)
+
+Outputs: OUT_DIR/razor-head/<tier>/rNNN/
+  cad-manifest.json, <id>.FCStd, step/<id>-<part>.step, 3mf/<id>-<part>.3mf,
+  <id>-report.md, drawings/<id>-<view>.svg
+  where <id> = <name>-<tier>-<process>.
+
+FRAME (brief.md): origin at the centre of the blade's centre hole. X along the
+blade length, Y across its width, Z up toward the top cap along the post axis.
+The blade's flat centre section has its mid-surface in Z = 0 and bends down
+symmetrically toward the cutting edges at +/-Y. All dimensions mm, angles deg.
+
+HOW THE GEOMETRY IS DERIVED
+  Blade cutout: centre hole, a narrow slot of blade.neck_width over the whole
+  slot_length, and the ovals and diamonds listed in blade.cutout.
+  Blade path (YZ section, each side): flat over head.flat_width, one arc, then a
+  straight tail at shave.bend_angle. With head.bend_radius null the arc fills
+  the blade between the flat and the clamp line, and the tail length is
+  fit.clamp_max: R = (width/2 - flat_width/2 - clamp_max) / bend_angle[rad].
+  Top cap: underside follows the blade's top face to the clamp line. The lip
+  ends there, square to the blade, with an edge break on its outer corner.
+  Shave plane: tangent to the built cap outline, at the tier's exposure from
+  the blade edge. This depends on the cap and the blade only.
+  Safety bar: its apex round is tangent to the shave plane and sits at the
+  tier's gap from the blade edge. So the baseplate alone sets gap and exposure.
+  Pockets are through-pockets: bar size plus part_clearance per side.
+  Drain slots are cut through between ribs. Ribs carry the blade support out
+  to the clamp line; under a slot the support ends earlier. The hard clamp
+  check measures at the ribs; the distance under a slot is printed as INFO.
+
+DERIVED DEFAULTS (no config key yet; see DERIVED below). Each can be overridden
+by adding the named key to config.yaml, after the brief is updated.
+
+NOT BUILT YET: guard.profile other than straight, head.end_notches: true, and
+the dimensioned production drawing (brief open question 11).
+"""
+import os, re, json, math, hashlib, datetime, glob, shutil, zipfile
+import FreeCAD as App
+import Part, Mesh, MeshPart, TechDraw
+from FreeCAD import Vector
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CONFIG = os.environ.get("CONFIG", os.path.join(HERE, "config.yaml"))
+OUT_DIR = os.environ.get("OUT_DIR", os.path.join(HERE, "output"))
+EXPORT_DIR = os.environ.get("EXPORT_DIR", "")          # "" = don't refresh exports/
+FAMILY = "razor-head"
+
+TOL = 1e-4        # mm and deg: "CAD precision" for gap, exposure, angle, fits
+EPS = 1e-6        # mm / mm^3: limits, residuals, interference
+DEFL = 2e-6       # mm: chord deflection when sampling section curves
+MESH_DEFL = 0.002 # mm: 3MF tessellation
+MESH_TOL = 1e-3   # relative volume difference allowed for the mesh read-back
+
+# key -> (default formula, as text for the report)
+DERIVED = {
+    "cap.crown_thickness": "hardware.screw_head_height (screw head sits flush)",
+    "cap.crown_flat":      "hardware.post_dia (flat width on top of the cap)",
+    "cap.lip_thickness":   "2 x finish.edge_break",
+    "guard.apex_radius":   "finish.edge_break",
+    "guard.width":         "process min_wall",
+    "guard.slot_count":    "5 per side",
+    "guard.rib_width":     "process min_wall",
+    "guard.end_wall":      "2 x process min_wall",
+    "baseplate.thickness": "head.max_height - blade.thickness - cap.crown_thickness",
+}
+
+
+def say(s=""):
+    # print() is swallowed when freecadcmd runs a .FCMacro; the console is not.
+    App.Console.PrintMessage(s + "\n")
+
+
+def safe_relpath(path):
+    root = os.path.abspath(os.path.dirname(HERE))
+    ap = os.path.abspath(path)
+    return os.path.relpath(ap, root) if ap.startswith(root + os.sep) else os.path.basename(ap)
+
+
+def sha12(path):
+    return hashlib.sha256(open(path, "rb").read()).hexdigest()[:12]
+
+
+def allocate_rev(sku_dir, config_sha, process):
+    """Reuse the rev whose manifest has this config sha and process, else next rNNN."""
+    os.makedirs(sku_dir, exist_ok=True)
+    revs = sorted(d for d in os.listdir(sku_dir) if re.match(r"^r\d{3}$", d))
+    for r in revs:
+        try:
+            m = json.load(open(os.path.join(sku_dir, r, "cad-manifest.json")))
+            if m.get("config_sha") == config_sha and m.get("process") == process:
+                return os.path.join(sku_dir, r)
+        except Exception:
+            pass
+    return os.path.join(sku_dir, "r%03d" % (len(revs) + 1))
+
+
+# ---------------------------------------------------------------- config
+def load_config(path):
+    try:
+        import yaml
+    except ImportError:
+        raise RuntimeError("PyYAML is required (FreeCAD 1.x bundles it)")
+    return yaml.safe_load(open(path))
+
+
+class D(dict):
+    __getattr__ = dict.__getitem__
+    __setattr__ = dict.__setitem__
+
+
+def opt(cfg, dotted, default):
+    """Optional override for a derived default: cfg['a']['b'] if present and not null."""
+    node = cfg
+    for k in dotted.split("."):
+        if not isinstance(node, dict) or node.get(k) is None:
+            return default
+        node = node[k]
+    return node
+
+
+def resolve(cfg, tier, process):
+    """Every number the build uses: config values plus derived ones."""
+    if process not in cfg["process_limits"]:
+        raise RuntimeError("process must be one of %s" % list(cfg["process_limits"]))
+    if tier not in cfg["shave"]["tiers"]:
+        raise RuntimeError("tier must be one of %s" % list(cfg["shave"]["tiers"]))
+    if cfg["guard"]["profile"] != "straight":
+        raise RuntimeError("guard.profile '%s' is not built yet (only straight)" % cfg["guard"]["profile"])
+    b, hw, lim = cfg["blade"], cfg["hardware"], cfg["process_limits"][process]
+    d = D(tier=tier, process=process, name=str(cfg["name"]), open_notes=[])
+
+    # reference blade
+    d.t, d.W = float(b["thickness"]), b["width"] / 2.0
+    d.blade_len, d.env_len, d.edge_span = b["length"], b["envelope_length"], b["edge_span"]
+    d.neck_w, d.slot_len, d.hole_r = float(b["neck_width"]), b["slot_length"], b["hole_dia"] / 2.0
+    d.cutout = b.get("cutout") or []
+    d.any_neck, d.any_reach = float(b["any_blade"]["neck_width"]), float(b["any_blade"]["reach"])
+    for c in d.cutout:
+        if c["shape"] not in ("oval", "diamond"):
+            raise RuntimeError("blade.cutout shape '%s' is not built (oval, diamond)" % c["shape"])
+    if b.get("source") is None:
+        d.open_notes.append("blade.source is null: blade dimensions are spec values, not measured (question 1)")
+
+    # shave targets
+    d.theta_deg = float(cfg["shave"]["bend_angle"])
+    d.theta = math.radians(d.theta_deg)
+    d.gap = float(cfg["shave"]["tiers"][tier]["gap"])
+    d.exposure = float(cfg["shave"]["tiers"][tier]["exposure"])
+    d.clamp_max = float(cfg["fit"]["clamp_max"])
+
+    # process limits
+    d.clr, d.min_wall = float(lim["part_clearance"]), float(lim["min_wall"])
+
+    # hardware
+    d.post_r, d.post_len = hw["post_dia"] / 2.0, float(hw["post_length"])
+    d.screw_dk, d.screw_k = hw.get("screw_head_dia"), hw.get("screw_head_height")
+    if d.screw_dk is None:
+        d.screw_dk = 2.0 * hw["post_dia"]
+        d.open_notes.append("hardware.screw_head_dia is null: using DIN 7991 nominal %.2f (question 5)" % d.screw_dk)
+    if d.screw_k is None:
+        d.screw_k = 0.56 * hw["post_dia"]
+        d.open_notes.append("hardware.screw_head_height is null: using DIN 7991 nominal %.2f (question 5)" % d.screw_k)
+    d.hole_clear_r = d.post_r + d.clr          # screw hole in the prototype cap
+
+    # head, bars, baseplate, finish
+    h, bars, bp = cfg["head"], cfg["bars"], cfg["baseplate"]
+    d.L, d.max_height, d.depth_range = float(h["length"]), float(h["max_height"]), h["depth_range"]
+    d.end_notches = bool(h.get("end_notches"))
+    d.bar_w, d.bar_len, d.bar_h, d.bar_x = bars["width"], bars["length"], bars["height"], bars["offset_x"]
+    d.min_play = float(bars["min_play"])
+    d.bore_r = d.post_r + d.clr + bp["bore_dia_extra"] / 2.0
+    d.slot_min_w, d.seat_r = float(bp["drain_slot_min_width"]), bp["handle_seat_dia"] / 2.0
+    d.edge_break = float(cfg["finish"]["edge_break"])
+
+    # derived defaults (DERIVED lists the formulas)
+    d.cap_T = float(opt(cfg, "cap.crown_thickness", d.screw_k))
+    d.cap_flat = float(opt(cfg, "cap.crown_flat", hw["post_dia"])) / 2.0
+    d.lip = float(opt(cfg, "cap.lip_thickness", 2.0 * d.edge_break))
+    d.guard_r = float(opt(cfg, "guard.apex_radius", d.edge_break))
+    d.guard_w = float(opt(cfg, "guard.width", d.min_wall))
+    d.n_slots = int(opt(cfg, "guard.slot_count", 5))
+    d.rib_w = float(opt(cfg, "guard.rib_width", d.min_wall))
+    d.end_wall = float(opt(cfg, "guard.end_wall", 2.0 * d.min_wall))
+    d.base_T = float(opt(cfg, "baseplate.thickness", d.max_height - d.t - d.cap_T))
+
+    # blade path: flat to y_b, arc R through theta, straight tail
+    d.flat_w = float(h["flat_width"])
+    d.y_b = d.flat_w / 2.0
+    R = h.get("bend_radius")
+    d.R_derived = R is None
+    d.R = (d.W - d.y_b - d.clamp_max) / d.theta if R is None else float(R)
+    d.tail = d.W - d.y_b - d.R * d.theta
+    if d.tail <= 0:
+        raise RuntimeError("bend_radius %.3f leaves no straight tail at the blade edge" % d.R)
+    s, c = math.sin(d.theta), math.cos(d.theta)
+    d.arc_end = (d.y_b + d.R * s, -d.R * (1 - c))
+    d.edge = (d.arc_end[0] + d.tail * c, d.arc_end[1] - d.tail * s)   # sharpened edge, +Y side
+    d.z_top = d.t / 2 + d.cap_T                 # top of the cap
+    d.z_seat = -d.t / 2 - d.base_T              # handle-seat face
+    return d
+
+
+# ---------------------------------------------------------------- 2D profile helpers (YZ plane)
+def line(a, b):
+    return ("L", a, b)
+
+
+def arc(c, r, a0, a1):
+    """Arc about centre c=(y,z); angles in degrees from +Y toward +Z."""
+    pt = lambda a: (c[0] + r * math.cos(math.radians(a)), c[1] + r * math.sin(math.radians(a)))
+    return ("A", pt(a0), pt((a0 + a1) / 2.0), pt(a1))
+
+
+def profile_solid(half, length):
+    """half: segments from the top centre (y=0) round the +Y side to the bottom
+    centre. Mirrors it, closes the wire, extrudes along X centred on the origin."""
+    m = lambda p: (-p[0], p[1])
+    back = [("L", m(s[2]), m(s[1])) if s[0] == "L" else ("A", m(s[3]), m(s[2]), m(s[1]))
+            for s in reversed(half)]
+    P = lambda p: Vector(-length / 2.0, p[0], p[1])
+    edges = []
+    for s in half + back:
+        if s[0] == "L":
+            if math.hypot(s[1][0] - s[2][0], s[1][1] - s[2][1]) > 1e-9:
+                edges.append(Part.makeLine(P(s[1]), P(s[2])))
+        else:
+            edges.append(Part.Arc(P(s[1]), P(s[2]), P(s[3])).toShape())
+    face = Part.Face(Part.Wire(edges))
+    return face.extrude(Vector(length, 0, 0))
+
+
+def cleaned_solid(shape):
+    c = shape.removeSplitter()
+    if c.Solids:
+        return max(c.Solids, key=lambda s: s.Volume) if len(c.Solids) == 1 else c
+    return shape
+
+
+def section_pts(shape, x):
+    """Points (y, z) sampled on the YZ section of shape at X = x."""
+    pts = []
+    for w in shape.slice(Vector(1, 0, 0), x):
+        for e in w.Edges:
+            if e.Curve.TypeId == "Part::GeomLine":
+                ps = [v.Point for v in e.Vertexes]
+            else:
+                ps = e.discretize(Deflection=DEFL)
+            pts += [(p.y, p.z) for p in ps]
+    return pts
+
+
+def support(pts, psi):
+    """Furthest extent of pts along the direction at angle psi, and the point."""
+    c, s = math.cos(psi), math.sin(psi)
+    best = max(pts, key=lambda p: p[0] * c + p[1] * s)
+    return best[0] * c + best[1] * s, best
+
+
+def bisect(f, lo, hi, n=60):
+    flo = f(lo)
+    if flo * f(hi) > 0:
+        raise RuntimeError("no sign change in bisection")
+    for _ in range(n):
+        mid = (lo + hi) / 2.0
+        if f(mid) * flo > 0:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
+
+
+# ---------------------------------------------------------------- build: reference blade
+def blade_cutout(d):
+    """Keyhole cutout as one tool: centre hole, narrow slot, ovals and diamonds at +/-x."""
+    ends = [c["x"] for c in d.cutout if c["x"] + c["length"] / 2.0 >= d.slot_len / 2.0 - 1e-6]
+    half = max(ends) if ends else d.slot_len / 2.0        # the narrow slot stops inside the end feature
+    tool = Part.makeBox(2 * half, d.neck_w, 2.0, Vector(-half, -d.neck_w / 2, -1.0))
+    tool = tool.fuse(Part.makeCylinder(d.hole_r, 2.0, Vector(0, 0, -1.0)))
+    for c in d.cutout:
+        a, b = c["length"] / 2.0, c["width"] / 2.0       # half extents along X and Y
+        for sx in (-1, 1):
+            x = sx * c["x"]
+            if c["shape"] == "diamond":
+                pts = [Vector(x - a, 0, -1), Vector(x, -b, -1), Vector(x + a, 0, -1), Vector(x, b, -1)]
+                wire = Part.makePolygon(pts + [pts[0]])
+            elif abs(a - b) < 1e-9:
+                wire = Part.Wire(Part.Circle(Vector(x, 0, -1), Vector(0, 0, 1), a).toShape())
+            else:                                        # Part.Ellipse(point on major, point on minor, centre)
+                major = Vector(x + a, 0, -1) if a > b else Vector(x, b, -1)
+                minor = Vector(x, b, -1) if a > b else Vector(x + a, 0, -1)
+                wire = Part.Wire(Part.Ellipse(major, minor, Vector(x, 0, -1)).toShape())
+            tool = tool.fuse(Part.Face(wire).extrude(Vector(0, 0, 2.0)))
+    return tool.removeSplitter()
+
+
+def build_blade(d):
+    th, t, C = d.theta_deg, d.t, (d.y_b, -d.R)
+    s, c = math.sin(d.theta), math.cos(d.theta)
+    n = (s, c)                                       # blade normal on the tail
+    e_top = (d.edge[0] + n[0] * t / 2, d.edge[1] + n[1] * t / 2)
+    e_bot = (d.edge[0] - n[0] * t / 2, d.edge[1] - n[1] * t / 2)
+    top, bot = arc(C, d.R + t / 2, 90, 90 - th), arc(C, d.R - t / 2, 90 - th, 90)
+    half = [line((0, t / 2), (d.y_b, t / 2)), top, line(top[3], e_top), line(e_top, e_bot),
+            line(e_bot, bot[1]), bot, line((d.y_b, -t / 2), (0, -t / 2))]
+    blade = profile_solid(half, d.blade_len)
+    return cleaned_solid(blade.cut(blade_cutout(d)))
+
+
+# ---------------------------------------------------------------- build: top cap
+def build_cap_body(d):
+    """The cap's prismatic body: same for every tier and both processes."""
+    th, t, C = d.theta_deg, d.t, (d.y_b, -d.R)
+    under = arc(C, d.R + t / 2, 90 - th, 90)         # clamp line -> flat
+    Pc = under[1]                                    # cap contact ends at the clamp line
+    Q = (Pc[0] + d.lip * math.sin(d.theta), Pc[1] + d.lip * math.cos(d.theta))
+    dy, dz = Q[0] - d.cap_flat, d.z_top - Q[1]
+    if dz <= 0 or dy < dz:
+        raise RuntimeError("cap crown does not fit: crown %.2f over lip, %.2f across" % (dz, dy))
+    Rt = (dy * dy + dz * dz) / (2 * dz)
+    aQ = math.degrees(math.asin(dy / Rt))
+    crown = arc((d.cap_flat, d.z_top - Rt), Rt, 90, 90 - aQ)
+    half = [line((0, d.z_top), (d.cap_flat, d.z_top)), crown, line(Q, Pc), under,
+            line((d.y_b, t / 2), (0, t / 2))]
+    body = profile_solid(half, d.L)
+    # edge break on the skin-contact lip corner
+    lip_edges = [e for e in body.Edges if len(e.Vertexes) == 2 and all(
+        abs(abs(v.Point.y) - Q[0]) < 1e-6 and abs(v.Point.z - Q[1]) < 1e-6 for v in e.Vertexes)]
+    note = None
+    try:
+        filleted = body.makeFillet(d.edge_break, lip_edges)
+        if not (filleted.isValid() and filleted.Solids):
+            raise RuntimeError("invalid fillet result")
+        body = filleted
+    except Exception as ex:
+        note = "cap lip edge break failed (%s); lip left sharp" % ex
+    return cleaned_solid(body), note
+
+
+def build_cap(d, body):
+    t = d.t
+    info = D(bars=[], void=None, post=None)
+    cap = body
+    for sx in (-1, 1):
+        x0 = sx * d.bar_x - d.bar_len / 2.0
+        info.bars.append(Part.makeBox(d.bar_len, d.bar_w, d.bar_h, Vector(x0, -d.bar_w / 2, t / 2 - d.bar_h)))
+        # the fused copy reaches 0.5 into the body so the boolean has an overlap
+        cap = cap.fuse(Part.makeBox(d.bar_len, d.bar_w, d.bar_h + 0.5, Vector(x0, -d.bar_w / 2, t / 2 - d.bar_h)))
+    if d.process == "prototype":
+        hole = Part.makeCylinder(d.hole_clear_r, 40.0, Vector(0, 0, -20.0))
+        rc = d.screw_dk / 2.0
+        cone = Part.makeCone(0.0, rc + 1.0, rc + 1.0, Vector(0, 0, d.z_top - rc))
+        info.void = hole.fuse(cone)
+        cap = cap.cut(info.void)
+    else:
+        info.post = Part.makeCylinder(d.post_r, d.post_len, Vector(0, 0, t / 2 - d.post_len))
+        cap = cap.fuse(Part.makeCylinder(d.post_r, d.post_len + 0.5, Vector(0, 0, t / 2 - d.post_len)))
+    return cleaned_solid(cap), info
+
+
+# ---------------------------------------------------------------- build: safety bar position
+def solve_guard(d, cap_body):
+    """Shave plane from the built cap outline and the tier's exposure, then the
+    safety bar apex from the tier's gap."""
+    pts = [p for p in section_pts(cap_body, 0.0) if p[0] > 0]
+    E, r = d.edge, d.guard_r
+    f = lambda a: E[0] * math.cos(a) + E[1] * math.sin(a) - support(pts, a)[0] - d.exposure
+    if f(0.0) <= 0:
+        raise RuntimeError("the cap covers the blade edge; no shave plane exists")
+    psi = bisect(f, 0.0, math.pi / 2)
+    n, tau = (math.cos(psi), math.sin(psi)), (math.sin(psi), -math.cos(psi))
+    a = -d.exposure - r                              # apex centre, along n from the edge
+    if (d.gap + r) ** 2 <= a * a:
+        raise RuntimeError("gap %.2f cannot be reached at exposure %.2f" % (d.gap, d.exposure))
+    b = math.sqrt((d.gap + r) ** 2 - a * a)
+    g = D(psi=psi, n=n, tau=tau)
+    g.G = (E[0] + a * n[0] + b * tau[0], E[1] + a * n[1] + b * tau[1])
+    g.y_in = g.G[0] - r                              # inner wall of the bar = outer wall of the drain slots
+    g.y_out = g.y_in + d.guard_w
+    s = (d.guard_w - 2 * r) / tau[0]                 # length of the flat top, along the shave plane
+    if s < 1e-3:
+        raise RuntimeError("guard.width must exceed two apex radii")
+    g.G2 = (g.G[0] + s * tau[0], g.G[1] + s * tau[1])
+    return g
+
+
+# ---------------------------------------------------------------- build: baseplate
+def slot_cutter(x0, x1, yc, w, z0, h):
+    """Stadium slot as one wire (two lines, two arcs), extruded along Z."""
+    r = w / 2.0
+    p1, p2 = Vector(x0 + r, yc, z0), Vector(x1 - r, yc, z0)
+    dx, ny = Vector(1, 0, 0), Vector(0, 1, 0)
+    a1, a2, a3, a4 = p1 + ny * r, p2 + ny * r, p2 - ny * r, p1 - ny * r
+    face = Part.Face(Part.Wire([Part.makeLine(a1, a2), Part.Arc(a2, p2 + dx * r, a3).toShape(),
+                                Part.makeLine(a3, a4), Part.Arc(a4, p1 - dx * r, a1).toShape()]))
+    return face.extrude(Vector(0, 0, h))
+
+
+def build_base(d, g):
+    th, t, r, C = d.theta_deg, d.t, d.guard_r, (d.y_b, -d.R)
+    psi = math.degrees(g.psi)
+    top = arc(C, d.R - t / 2, 90, 90 - th)           # blade support, flat -> clamp line
+    Pb = top[3]
+    z_ch = g.G[1]                                    # floor of the channel under the free blade
+    z_u = min(z_ch - d.min_wall, g.G2[1] - 1.5 * r, d.z_seat)   # underside of the guard wing
+    y_k = Pb[0] - d.min_wall                         # where the underside starts to rise to the seat
+    if not (g.y_in - d.slot_min_w > d.y_b and g.y_in > Pb[0] + 1e-3):
+        raise RuntimeError("no room for the channel between the clamp line and the safety bar")
+    if not (d.seat_r < y_k < g.y_out - r):
+        raise RuntimeError("handle seat is wider than the baseplate allows")
+    apex, crest = arc(g.G, r, 180, psi), arc(g.G2, r, psi, 0)
+    foot = arc((g.y_out - r, z_u + r), r, 0, -90)
+    half = [line((0, -t / 2), (d.y_b, -t / 2)), top,
+            line(Pb, (Pb[0], z_ch)), line((Pb[0], z_ch), apex[1]),
+            apex, line(apex[3], crest[1]), crest,
+            line(crest[3], foot[1]), foot,
+            line(foot[3], (y_k, z_u)), line((y_k, z_u), (d.seat_r, d.z_seat)),
+            line((d.seat_r, d.z_seat), (0, d.z_seat))]
+    body = profile_solid(half, d.L)
+
+    info = D(pockets=[], slots=[], Pb=Pb, z_ch=z_ch, z_u=z_u)
+    z0, h = z_u - 1.0, d.z_top - z_u + 2.0
+    info.bore = Part.makeCylinder(d.bore_r, h, Vector(0, 0, z0))
+    pl, pw = d.bar_len + 2 * d.clr, d.bar_w + 2 * d.clr
+    for sx in (-1, 1):
+        info.pockets.append(Part.makeBox(pl, pw, h, Vector(sx * d.bar_x - pl / 2, -pw / 2, z0)))
+    slot_len = (d.L - 2 * d.end_wall - (d.n_slots - 1) * d.rib_w) / d.n_slots
+    if slot_len <= d.slot_min_w:
+        raise RuntimeError("drain slots do not fit along the head")
+    info.slot_len, info.slot_x = slot_len, []
+    yc = g.y_in - d.slot_min_w / 2.0
+    for i in range(d.n_slots):
+        x0 = -d.L / 2 + d.end_wall + i * (slot_len + d.rib_w)
+        info.slot_x.append((x0, x0 + slot_len))
+        for sy in (-1, 1):
+            info.slots.append(slot_cutter(x0, x0 + slot_len, sy * yc, d.slot_min_w, z0, h))
+    tool = info.bore
+    for c in info.pockets + info.slots:
+        tool = tool.fuse(c)
+    info.tool = tool
+    # section stations: a rib centre, the centre of an off-axis slot, near one end
+    s0, s1 = info.slot_x[0], info.slot_x[1]
+    info.stations = [("rib", (s0[1] + s1[0]) / 2.0), ("slot", (s1[0] + s1[1]) / 2.0), ("end", d.L / 2 - d.end_wall / 2.0)]
+    # where the blade support ends under a slot, as distance from the edge along the blade
+    y_s = g.y_in - d.slot_min_w
+    phi = math.asin(min(1.0, (y_s - d.y_b) / (d.R - t / 2)))
+    info.clamp_at_slot = d.tail + d.R * (d.theta - phi) if phi < d.theta else d.tail
+    return cleaned_solid(body.cut(tool)), info
+
+
+def build_variant(cfg, tier, process):
+    d = resolve(cfg, tier, process)
+    body, note = build_cap_body(d)
+    cap, capinfo = build_cap(d, body)
+    g = solve_guard(d, body)
+    base, baseinfo = build_base(d, g)
+    return D(d=d, blade=build_blade(d), cap=cap, base=base, capinfo=capinfo, baseinfo=baseinfo, guard=g, note=note)
+
+
+# ---------------------------------------------------------------- measure (from the built solids)
+def contact_arcs(part, blade):
+    """Curved faces of part that lie on the bent blade."""
+    out = []
+    for f in part.Faces:
+        s = f.Surface
+        if s.TypeId != "Part::GeomCylinder" or abs(abs(s.Axis.x) - 1.0) > 1e-9:
+            continue
+        u0, u1, v0, v1 = f.ParameterRange
+        if Part.Vertex(f.valueAt((u0 + u1) / 2, (v0 + v1) / 2)).distToShape(blade)[0] < 1e-6:
+            out.append(f)
+    return out
+
+
+def void_boxes(solid, probe):
+    """Bounding boxes of the pieces of probe not filled by solid (holes), or of
+    the pieces of solid inside probe when probe is used with common()."""
+    return [s.BoundBox for s in probe.cut(solid).Solids]
+
+
+def measure(v):
+    d, cap, base, blade = v.d, v.cap, v.base, v.blade
+    m = D()
+    # sharpened edge: centre of the blade's end face
+    fe = max(blade.Faces, key=lambda f: f.CenterOfMass.y)
+    E = (fe.CenterOfMass.y, fe.CenterOfMass.z)
+    m.edge = E
+
+    # blade gap: shortest distance from the edge line to the baseplate, both sides
+    m.gaps, m.gap_on_guard = [], True
+    for side in (1, -1):
+        ln = Part.makeLine(Vector(-d.edge_span / 2, side * E[0], E[1]), Vector(d.edge_span / 2, side * E[0], E[1]))
+        dist, pairs, _ = ln.distToShape(base)
+        m.gaps.append(dist)
+        m.gap_on_guard &= abs(pairs[0][1].y) > v.guard.y_in - 1e-6
+        if side == 1:
+            m.gap_pt = (pairs[0][1].y, pairs[0][1].z)      # nearest point on the safety bar
+
+    # shave plane and exposure: common tangent of cap and baseplate sections
+    m.exposures, m.psis, m.plane_on_guard = [], [], True
+    for name, x in v.baseinfo.stations:
+        cp, bp = section_pts(cap, x), section_pts(base, x)
+        for side in (1, -1):
+            c1 = [(side * p[0], p[1]) for p in cp if side * p[0] > 0]
+            b1 = [(side * p[0], p[1]) for p in bp if side * p[0] > 0]
+            psi = bisect(lambda a: support(c1, a)[0] - support(b1, a)[0], 0.0, math.pi / 2)
+            h, _ = support(c1, psi)
+            _, touch = support(b1, psi)
+            m.exposures.append(E[0] * math.cos(psi) + E[1] * math.sin(psi) - h)
+            m.psis.append(math.degrees(psi))
+            m.plane_on_guard &= touch[0] > v.guard.y_in - 1e-6
+            if name == "rib" and side == 1:                # kept for the drawings
+                m.plane = D(cap_pt=support(c1, psi)[1], base_pt=touch)
+
+    # cutting angle and clamp distance: where each part stops touching the blade
+    m.angles, ends = [], {}
+    for key, part in (("cap", cap), ("base", base)):
+        arcs = contact_arcs(part, blade)
+        vs = [vx.Point for f in arcs for vx in f.Vertexes]
+        if not vs:
+            m.angles.append(float("nan")); ends[key] = float("nan"); continue
+        for f in arcs:
+            p = max((vx.Point for vx in f.Vertexes), key=lambda q: abs(q.y))
+            u, w = f.Surface.parameter(p)
+            nrm = f.normalAt(u, w)
+            m.angles.append(math.degrees(math.atan2(abs(nrm.y), abs(nrm.z))))
+        th = math.radians(m.angles[-1])
+        ends[key] = min((E[0] - abs(p.y)) * math.cos(th) - (E[1] - p.z) * math.sin(th) for p in vs)
+    m.clamp_cap, m.clamp_base = ends["cap"], ends["base"]
+    m.clamp = max(ends.values())
+
+    # head height: seat face (the downward flat that spans the axis) to the top of the cap
+    seats = [f for f in base.Faces if f.Surface.TypeId == "Part::GeomPlane"
+             and f.normalAt(0, 0).z < -0.999 and f.BoundBox.YMin < 0 < f.BoundBox.YMax]
+    m.seat_z = min(f.BoundBox.ZMin for f in seats) if seats else float("nan")
+    m.seat_w = max(f.BoundBox.YLength for f in seats) if seats else float("nan")
+    m.height = cap.BoundBox.ZMax - m.seat_z
+    m.overall_z = cap.BoundBox.ZMax - base.BoundBox.ZMin
+    m.depth = base.BoundBox.YLength
+    m.reveal = E[0] - cap.BoundBox.YMax
+
+    # bars (the part of the cap inside the blade thickness and below it)
+    big = 2 * d.L
+    in_blade = Part.makeBox(big, big, d.t, Vector(-big / 2, -big / 2, -d.t / 2))
+    below = Part.makeBox(big, big, 0.2, Vector(-big / 2, -big / 2, -d.t / 2 - 0.4))
+    m.bars_in_blade = [s.BoundBox for s in cap.common(in_blade).Solids if abs(s.BoundBox.Center.x) > 1.0]
+    m.bars = sorted((s.BoundBox for s in cap.common(below).Solids if abs(s.BoundBox.Center.x) > 1.0),
+                    key=lambda bb: bb.Center.x)
+    # pockets and bore (holes through a slab inside the baseplate)
+    hw = d.bar_w / 2 + d.clr + 1.0
+    slab = Part.makeBox(d.L - 1.0, 2 * hw, 0.2 * d.base_T, Vector(-d.L / 2 + 0.5, -hw, -d.t / 2 - 0.4 * d.base_T))
+    holes = [s.BoundBox for s in slab.cut(base).Solids]
+    m.pockets = sorted((bb for bb in holes if abs(bb.Center.x) > 1.0), key=lambda bb: bb.Center.x)
+    m.bore = [bb for bb in holes if abs(bb.Center.x) <= 1.0]
+    return m
+
+
+def spread(vals):
+    return max(vals) - min(vals)
+
+
+def nz(x, nd=4):
+    """x rounded to nd places, with -0.0 turned into 0.0 so it never prints as '-0.000'."""
+    return round(x, nd) + 0.0
+
+
+def slid_edge(v, m, s):
+    """Gap and exposure with the blade slid s along its bend (s > 0 moves this edge out).
+    The cap and baseplate stay put, so the shave plane does not move."""
+    th = math.radians(sum(m.angles) / len(m.angles))
+    E = (m.edge[0] + s * math.cos(th), m.edge[1] - s * math.sin(th))
+    ln = Part.makeLine(Vector(-v.d.edge_span / 2, E[0], E[1]), Vector(v.d.edge_span / 2, E[0], E[1]))
+    gap = ln.distToShape(v.base)[0]
+    c, b = m.plane.cap_pt, m.plane.base_pt
+    L = math.hypot(b[0] - c[0], b[1] - c[1])
+    n = (-(b[1] - c[1]) / L, (b[0] - c[0]) / L)       # outward normal of the shave plane
+    return gap, (E[0] - c[0]) * n[0] + (E[1] - c[1]) * n[1]
+
+
+# ---------------------------------------------------------------- checks
+class Checks:
+    def __init__(self):
+        self.rows = []
+
+    def hard(self, name, target, measured, ok, key=""):
+        self.rows.append(dict(kind="PASS" if ok else "FAIL", name=name, target=target, measured=measured, key=key))
+
+    def info(self, name, measured, note=""):
+        self.rows.append(dict(kind="INFO", name=name, target="", measured=measured, key=note))
+
+    def show(self):
+        for r in self.rows:
+            tgt = ("target %s" % r["target"]) if r["target"] else ""
+            say("  %-4s  %-34s %-22s %-28s %s" % (r["kind"], r["name"], tgt, r["measured"], r["key"]))
+
+    @property
+    def ok(self):
+        return all(r["kind"] != "FAIL" for r in self.rows)
+
+
+def run_checks(cfg, v, m, other, m_other, tier_caps):
+    d, cap, base, blade = v.d, v.cap, v.base, v.blade
+    ck = Checks()
+    tkey = "shave.tiers.%s" % d.tier
+    lkey = "process_limits.%s" % d.process
+
+    # --- shave geometry
+    gap_err = max(abs(x - d.gap) for x in m.gaps)
+    ck.hard("blade gap", "%.3f" % d.gap, "%.4f / %.4f (+Y / -Y)" % tuple(m.gaps),
+            gap_err < TOL and m.gap_on_guard, tkey + ".gap")
+    exp_err = max(abs(x - d.exposure) for x in m.exposures)
+    ck.hard("blade exposure", "%+.3f" % d.exposure, "%+.4f .. %+.4f" % (nz(min(m.exposures)), nz(max(m.exposures))),
+            exp_err < TOL and m.plane_on_guard, tkey + ".exposure")
+    ang_err = max(abs(a - d.theta_deg) for a in m.angles) if m.angles else float("nan")
+    ck.hard("cutting angle", "%.2f" % d.theta_deg, "%.4f .. %.4f" % (min(m.angles), max(m.angles)),
+            ang_err < TOL, "shave.bend_angle")
+    dm = max(abs(a - b) for a, b in zip(m.gaps + m.exposures + m.angles + [m.clamp],
+                                        m_other.gaps + m_other.exposures + m_other.angles + [m_other.clamp]))
+    ck.hard("shave geometry, both processes", "equal", "max diff %.6f (vs %s)" % (dm, other.d.process),
+            dm < TOL, "process")
+    res = max(cap.cut(c).Volume + c.cut(cap).Volume for c in tier_caps.values()) if tier_caps else 0.0
+    ck.hard("top cap identical for every tier", "0", "residual %.6f mm3 (%d tiers)" % (res, len(tier_caps) + 1),
+            res < EPS, "shave.tiers")
+    ck.hard("clamp distance, at the ribs", "<= %.2f" % d.clamp_max, "%.4f (cap %.4f, base %.4f)" % (m.clamp, m.clamp_cap, m.clamp_base),
+            m.clamp <= d.clamp_max + EPS, "fit.clamp_max")
+    ck.hard("head height", "<= %.2f" % d.max_height, "%.4f" % m.height, m.height <= d.max_height + EPS, "head.max_height")
+
+    # --- blade cover
+    cover = min(-cap.BoundBox.XMin, cap.BoundBox.XMax, -base.BoundBox.XMin, base.BoundBox.XMax) * 2
+    if d.end_notches:
+        ck.hard("end notches expose the tabs", "notches", "not built yet", False, "head.end_notches")
+    else:
+        ck.hard("head covers the blade envelope", ">= %.2f" % d.env_len, "%.3f" % cover,
+                cover >= d.env_len - EPS, "head.length, blade.envelope_length")
+
+    # --- alignment bars and pockets
+    bars_ok = len(m.bars) == 2 and len(m.bars_in_blade) == 2
+    if bars_ok:
+        to_hole = min(abs(bb.Center.x) - bb.XLength / 2 for bb in m.bars_in_blade) - d.hole_r
+        to_end = d.slot_len / 2 - max(abs(bb.Center.x) + bb.XLength / 2 for bb in m.bars_in_blade)
+        side = Part.makeCompound(v.capinfo.bars).distToShape(blade)[0]   # nearest blade material to a bar
+        hit = cap.common(blade).Volume
+        ck.hard("bars inside the blade cutout", ">= 0",
+                "hole %.3f, cutout end %.3f, blade %.3f" % (to_hole, to_end, side),
+                min(to_hole, to_end, side) >= -EPS and hit < EPS, "bars.*, blade.neck_width, blade.cutout")
+        widths = [bb.YLength for bb in m.bars]
+        play = (d.any_neck - max(widths)) / 2.0
+        reach = max(abs(bb.Center.x) + bb.XLength / 2 for bb in m.bars)
+        ck.hard("bars pass through any DE blade", "play >= %.2f, reach <= %.2f" % (d.min_play, d.any_reach),
+                "width %.4f, play %.4f, reach %.4f" % (max(widths), play, reach),
+                max(abs(w - d.bar_w) for w in widths) < TOL and play >= d.min_play - EPS and reach <= d.any_reach + EPS,
+                "bars.width, bars.min_play, blade.any_blade")
+    else:
+        ck.hard("bars inside the blade cutout", "2 bars", "found %d" % len(m.bars), False, "bars.*")
+    if bars_ok and len(m.pockets) == 2:
+        gaps = []
+        for bar, pk in zip(m.bars, m.pockets):
+            gaps += [bar.XMin - pk.XMin, pk.XMax - bar.XMax, bar.YMin - pk.YMin, pk.YMax - bar.YMax]
+        ck.hard("pocket = bar + clearance per side", "%.3f" % d.clr, "%.4f .. %.4f (8 sides)" % (min(gaps), max(gaps)),
+                max(abs(x - d.clr) for x in gaps) < TOL, lkey + ".part_clearance")
+        ck.info("pocket width / length", "%.3f / %.3f" % (m.pockets[0].YLength, m.pockets[0].XLength), "through-pockets")
+    else:
+        ck.hard("pocket = bar + clearance per side", "2 pockets", "found %d" % len(m.pockets), False, lkey)
+
+    # --- named walls (measured between the features that bound each wall)
+    bi, ci = v.baseinfo, v.capinfo
+    wall = lambda name, val, key=lkey + ".min_wall": ck.hard(
+        "wall: " + name, ">= %.2f" % d.min_wall, "%.4f" % val, val >= d.min_wall - EPS, key)
+    pockets = Part.makeCompound(bi.pockets)
+    slots = Part.makeCompound(bi.slots)
+    bars = Part.makeCompound(ci.bars)
+    bb, pb, sb = base.BoundBox, pockets.BoundBox, slots.BoundBox
+    wall("pocket to edge", min(pockets.distToShape(slots)[0], bb.XMax - pb.XMax, pb.XMin - bb.XMin))
+    wall("bore to pocket", bi.bore.distToShape(pockets)[0])
+    wall("drainage slot to edge", min(bb.YMax - sb.YMax, sb.YMin - bb.YMin, bb.XMax - sb.XMax, sb.XMin - bb.XMin))
+    wall("rib between drain slots", min(bi.slots[i].distToShape(bi.slots[i + 2])[0] for i in range(len(bi.slots) - 2)))
+    if d.process == "prototype":
+        wall("countersink / screw hole to bar", ci.void.distToShape(bars)[0])
+    else:
+        wall("post to bar", ci.post.distToShape(bars)[0])
+    slot_w = sorted(2 * f.Surface.Radius for f in base.Faces if f.Surface.TypeId == "Part::GeomCylinder"
+                    and abs(abs(f.Surface.Axis.z) - 1) < 1e-9 and abs(f.Surface.Center.y) > d.y_b)
+    n_exp = 4 * d.n_slots
+    ck.hard("drain slot width", ">= %.2f" % d.slot_min_w,
+            ("%.4f (%d slot ends)" % (slot_w[0], len(slot_w))) if slot_w else "no slots found",
+            len(slot_w) == n_exp and slot_w[0] >= d.slot_min_w - EPS, "baseplate.drain_slot_min_width")
+
+    # --- solids, booleans, interference
+    for name, s in (("top cap", cap), ("baseplate", base)):
+        one = len(s.Solids) == 1 and s.isValid() and all(sh.isClosed() for sh in s.Shells)
+        ck.hard("%s is one valid solid" % name, "1 solid", "%d solid, valid %s, %.1f mm3" % (len(s.Solids), s.isValid(), s.Volume), one)
+    resid = bi.tool.common(base).Volume + (ci.void.common(cap).Volume if ci.void else 0.0)
+    ck.hard("cutter residual", "0", "%.6f mm3" % resid, resid < EPS)
+    clash = cap.common(base).Volume + cap.common(blade).Volume + base.common(blade).Volume
+    ck.hard("interference cap / blade / baseplate", "0", "%.6f mm3" % clash, clash < EPS)
+    recess = d.base_T - (d.bar_h - d.t)
+    ck.hard("bar tips stay above the seat face", ">= 0", "%.3f" % recess, recess >= -EPS, "bars.height")
+
+    # --- reported, not limited
+    ck.info("clamp under a drain slot", "%.3f" % bi.clamp_at_slot,
+            "%s fit.clamp_max %.2f; support is cut back over each %.2f slot; ribs %.2f"
+            % ("OVER" if bi.clamp_at_slot > d.clamp_max + EPS else "within", d.clamp_max, bi.slot_len, d.rib_w))
+    ck.info("blade reveal", "%.3f" % m.reveal, "edge beyond the cap, seen from above")
+    s = (d.neck_w - d.bar_w) / 2.0
+    ck.info("blade play, modelled blade", "+/-%.3f" % s, "slot %.2f, bars %.2f" % (d.neck_w, d.bar_w))
+    for name, ds in (("edge slid out", s), ("edge slid in", -s)):
+        g, e = slid_edge(v, m, ds)
+        ck.info("%s %.2f" % (name, abs(ds)), "gap %.3f, exp %+.3f, clamp %.3f" % (g, e, m.clamp + ds),
+                "the other edge moves the opposite way")
+    ck.info("shave plane to blade", "%.2f deg" % (90 - d.theta_deg - sum(m.psis) / len(m.psis)), "skin angle at the edge")
+    ck.info("bend radius", "%.3f" % d.R, "derived (head.bend_radius null)" if d.R_derived else "head.bend_radius")
+    lo, hi = d.depth_range
+    ck.info("head depth (Y)", "%.3f" % m.depth,
+            "inside head.depth_range" if lo <= m.depth <= hi else "OUTSIDE head.depth_range %.2f-%.2f" % (lo, hi))
+    ck.info("overall Z extent", "%.3f" % m.overall_z, "guard wings sit %.2f below the seat face" % (m.overall_z - m.height))
+    ck.info("handle seat flat width", "%.3f" % m.seat_w, "baseplate.handle_seat_dia %.2f" % (2 * d.seat_r))
+    if d.process == "production":
+        ck.info("post below the seat face", "%.3f" % (d.post_len - d.t - d.base_T), "thread M5x0.8 called out, not modelled")
+    return ck
+
+
+# ---------------------------------------------------------------- drawings (SVG) and report
+COL = dict(cap="#a9bccd", base="#dccb9f", blade="#2b2b2b", ink="#222222", plane="#1f6fd1",
+           gap="#d1341f", clamp="#1a8f4c", angle="#c77700", dim="#555555")
+
+
+K = 100   # SVG units per mm, so text gets ordinary font sizes
+
+
+def svg_write(path, vb, body, px=900):
+    """vb = (x, y, w, h) in mm. Model (y, z) maps to SVG (y, -z)."""
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('<svg xmlns="http://www.w3.org/2000/svg" viewBox="%.1f %.1f %.1f %.1f" width="%d" height="%d" '
+                'font-family="Helvetica, Arial, sans-serif">\n' % (tuple(c * K for c in vb) + (px, round(px * vb[3] / vb[2]))))
+        f.write('<g transform="scale(%d)">\n' % K)
+        f.write('<rect x="%.3f" y="%.3f" width="%.3f" height="%.3f" fill="#ffffff"/>\n' % vb)
+        f.write("\n".join(body) + "\n</g>\n</svg>\n")
+
+
+def poly(pts, color, w, dash=None):
+    d = "M" + " L".join("%.4f,%.4f" % (p[0], -p[1]) for p in pts)
+    return ('<path d="%s" fill="none" stroke="%s" stroke-width="%.4f" stroke-linecap="round" stroke-linejoin="round"%s/>'
+            % (d, color, w, (' stroke-dasharray="%s"' % dash) if dash else ""))
+
+
+def text(y, z, s, size, color=None, anchor="start"):
+    return ('<text transform="scale(%g)" x="%.1f" y="%.1f" font-size="%.1f" fill="%s" text-anchor="%s">%s</text>'
+            % (1.0 / K, y * K, -z * K, size * K, color or COL["ink"], anchor, s))
+
+
+def dot(p, r, fill, stroke, w):
+    return '<circle cx="%.4f" cy="%.4f" r="%.4f" fill="%s" stroke="%s" stroke-width="%.4f"/>' % (p[0], -p[1], r, fill, stroke, w)
+
+
+def section_path(shape, x, fill, w):
+    d = []
+    for wire in shape.slice(Vector(1, 0, 0), x):
+        pts = wire.discretize(Deflection=0.002)
+        d.append("M" + " L".join("%.4f,%.4f" % (p.y, -p.z) for p in pts) + " Z")
+    return ('<path d="%s" fill="%s" fill-rule="evenodd" stroke="%s" stroke-width="%.4f" stroke-linejoin="round"/>'
+            % (" ".join(d), fill, COL["ink"], w))
+
+
+def plane_line(m, side, ext):
+    """The measured shave plane: through the cap and safety-bar tangent points, extended."""
+    c, b = m.plane.cap_pt, m.plane.base_pt
+    ln = math.hypot(b[0] - c[0], b[1] - c[1])
+    u = ((b[0] - c[0]) / ln, (b[1] - c[1]) / ln)
+    return [(side * (c[0] - ext * u[0]), c[1] - ext * u[1]), (side * (b[0] + ext * u[0]), b[1] + ext * u[1])]
+
+
+def draw_section(v, m, x, path):
+    """Whole head, YZ section at X = x, with the shave planes and the head height."""
+    bb, zt, fs = v.base.BoundBox, v.cap.BoundBox.ZMax, 0.55
+    yd = -(bb.YMax + 1.0)                            # where the height dimension stands
+    body = [section_path(v.base, x, COL["base"], 0.04), section_path(v.cap, x, COL["cap"], 0.04),
+            section_path(v.blade, x, COL["blade"], 0.0)]
+    for side in (1, -1):
+        body.append(poly(plane_line(m, side, 1.2), COL["plane"], 0.05, "0.25 0.18"))
+    for z in (zt, m.seat_z):
+        body.append(poly([(-v.d.seat_r, z), (yd - 0.3, z)], COL["dim"], 0.03, "0.15 0.12"))
+    body.append(poly([(yd, zt), (yd, m.seat_z)], COL["dim"], 0.05))
+    body.append(text(yd - 0.25, (zt + m.seat_z) / 2 - fs * 0.35, "%.3f" % m.height, fs, COL["dim"], "end"))
+    svg_write(path, (yd - 2.4, -(zt + 0.8), bb.YMax + 1.0 - (yd - 2.4), zt + 0.8 - (bb.ZMin - 0.8)), body)
+
+
+def draw_detail(v, m, x, path):
+    """+Y blade edge, YZ section at X = x (a rib), with the shave geometry marked."""
+    d, E, bb = v.d, m.edge, v.base.BoundBox
+    y0, y1, z0, z1 = E[0] - 3.2, bb.YMax + 0.5, bb.ZMin - 0.3, E[1] + 3.0
+    th = math.radians(sum(m.angles) / len(m.angles))
+    u, n = (math.cos(th), -math.sin(th)), (math.sin(th), math.cos(th))
+    C0 = (E[0] - m.clamp * u[0], E[1] - m.clamp * u[1])          # clamp line, on the blade
+    geo = [section_path(v.base, x, COL["base"], 0.02), section_path(v.cap, x, COL["cap"], 0.02),
+           section_path(v.blade, x, COL["blade"], 0.0),
+           poly(plane_line(m, 1, 1.0), COL["plane"], 0.025, "0.12 0.09")]
+    # cutting angle: horizontal reference and arc, from the top of the blade at the clamp line
+    A = (C0[0] + n[0] * d.t / 2, C0[1] + n[1] * d.t / 2)
+    geo.append(poly([A, (A[0] + 1.3, A[1])], COL["angle"], 0.02, "0.08 0.06"))
+    geo.append(poly([(A[0] + math.cos(th * i / 20.0), A[1] - math.sin(th * i / 20.0)) for i in range(21)], COL["angle"], 0.03))
+    # clamp distance: dimension below the blade, clamp line to edge
+    off = lambda p, k: (p[0] - k * n[0], p[1] - k * n[1])
+    geo.append(poly([off(C0, 0.28), off(E, 0.28)], COL["clamp"], 0.03))
+    for p in (C0, E):
+        geo.append(poly([off(p, 0.18), off(p, 0.38)], COL["clamp"], 0.03))
+    # gap: edge to the nearest point of the safety bar
+    geo.append(poly([E, m.gap_pt], COL["gap"], 0.035))
+    geo.append(dot(m.gap_pt, 0.035, COL["gap"], COL["gap"], 0.0))
+    geo.append(dot(E, 0.05, "#ffffff", COL["plane"], 0.025))
+    win = (y0, -z1, y1 - y0, z1 - z0)
+    body = ['<clipPath id="win"><rect x="%.3f" y="%.3f" width="%.3f" height="%.3f"/></clipPath>' % win,
+            '<g clip-path="url(#win)">'] + geo + ['</g>',
+            '<rect x="%.3f" y="%.3f" width="%.3f" height="%.3f" fill="none" stroke="#999999" stroke-width="0.015"/>' % win]
+    # legend, in a column to the right of the drawing
+    fs, lx, z = 0.17, y1 + 0.3, z1 - 0.3
+    exp = sum(m.exposures) / len(m.exposures)
+    rows = [("swatch", COL["cap"], "top cap"), ("swatch", COL["base"], "baseplate and safety bar"),
+            ("swatch", COL["blade"], "blade, %.2f thick" % d.t),
+            ("dash", COL["plane"], "shave plane"),
+            ("dot", COL["plane"], "exposure %+.3f (target %+.3f)" % (nz(exp, 3), d.exposure)),
+            ("line", COL["gap"], "gap %.3f (target %.3f)" % (max(m.gaps), d.gap)),
+            ("line", COL["angle"], "cutting angle %.2f° (target %.2f°)" % (math.degrees(th), d.theta_deg)),
+            ("line", COL["clamp"], "clamp distance at a rib %.3f (limit %.2f)" % (m.clamp, d.clamp_max)),
+            ("none", None, "shave plane to blade %.1f°" % (90 - math.degrees(th) - sum(m.psis) / len(m.psis)))]
+    for kind, col, label in rows:
+        if kind == "swatch":
+            body.append('<rect x="%.3f" y="%.3f" width="0.45" height="0.2" fill="%s" stroke="%s" stroke-width="0.012"/>'
+                        % (lx, -z - 0.14, col, COL["ink"]))
+        elif kind in ("line", "dash"):
+            body.append(poly([(lx, z + 0.05), (lx + 0.45, z + 0.05)], col, 0.035, "0.12 0.09" if kind == "dash" else None))
+        elif kind == "dot":
+            body.append(dot((lx + 0.22, z + 0.05), 0.05, "#ffffff", col, 0.025))
+        body.append(text(lx + 0.65, z, label, fs))
+        z -= 0.36
+    svg_write(path, (y0 - 0.15, -z1 - 0.15, (y1 - y0) + 0.3 + 4.6, (z1 - z0) + 0.3), body)
+
+
+def draw_plan(shape, direction, path, overlay=(), drop_y=None):
+    """Visible edges seen along -direction. (0,0,1) is from above; (0,0,-1) from below.
+    overlay: bounding boxes drawn as filled rectangles (the bars, on the blade view).
+    drop_y: leave out lines along X at +/- this Y (the blade's bend line, which the
+    projection draws only in part)."""
+    groups = TechDraw.projectEx(shape, direction)
+    body, bb = [], None
+    for grp in (groups[0], groups[3]):               # sharp edges, outlines
+        if grp.isNull():
+            continue
+        bb = grp.BoundBox if bb is None else bb.united(grp.BoundBox)
+        for e in grp.Edges:
+            try:
+                pts = e.discretize(Deflection=0.01)
+            except Exception:
+                pts = [vx.Point for vx in e.Vertexes]
+            if drop_y is not None and all(abs(abs(p.y) - drop_y) < 1e-3 and abs(p.y - pts[0].y) < 1e-3 for p in pts):
+                continue
+            body.append(poly([(p.x, p.y) for p in pts], COL["ink"], 0.07))
+    for o in overlay:
+        body.insert(0, '<rect x="%.3f" y="%.3f" width="%.3f" height="%.3f" fill="%s" stroke="%s" stroke-width="0.05"/>'
+                    % (o.XMin, -o.YMax, o.XLength, o.YLength, COL["cap"], COL["ink"]))
+    mg = 1.2
+    bar_z = bb.YMin - mg - 0.8                       # 10 mm scale bar under the view
+    body.append(poly([(bb.XMin, bar_z), (bb.XMin + 10.0, bar_z)], COL["dim"], 0.12))
+    for xx in (bb.XMin, bb.XMin + 10.0):
+        body.append(poly([(xx, bar_z - 0.3), (xx, bar_z + 0.3)], COL["dim"], 0.12))
+    body.append(text(bb.XMin + 10.6, bar_z - 0.32, "10 mm", 0.9, COL["dim"]))
+    svg_write(path, (bb.XMin - mg, -bb.YMax - mg, bb.XLength + 2 * mg, bb.YLength + 2 * mg + 2.0), body)
+
+
+def write_drawings(v, m, rev_dir, ident):
+    ddir = os.path.join(rev_dir, "drawings"); os.makedirs(ddir, exist_ok=True)
+    st = dict(v.baseinfo.stations)
+    out = {k: os.path.join(ddir, "%s-%s.svg" % (ident, k))
+           for k in ("section", "edge-detail", "blade", "top_cap", "baseplate")}
+    draw_section(v, m, st["slot"], out["section"])
+    draw_detail(v, m, st["rib"], out["edge-detail"])
+    draw_plan(v.blade, Vector(0, 0, 1), out["blade"], [b.BoundBox for b in v.capinfo.bars], drop_y=v.d.y_b)
+    draw_plan(v.cap, Vector(0, 0, -1), out["top_cap"])
+    draw_plan(v.base, Vector(0, 0, 1), out["baseplate"])
+    return out
+
+
+def write_report(path, ident, v, m, ck, result, drawings, config_sha, derived_vals):
+    d, st = v.d, dict(v.baseinfo.stations)
+    rel = lambda k: os.path.relpath(drawings[k], os.path.dirname(path)).replace(os.sep, "/")
+    hard = [r for r in ck.rows if r["kind"] != "INFO"]
+    fails = [r for r in hard if r["kind"] == "FAIL"]
+    row = lambda *cells: "| " + " | ".join(str(c) for c in cells) + " |"
+    L = ["# Razor head: %s tier, %s" % (d.tier, d.process), "",
+         "**Result: %s.** %d of %d hard checks pass." % (result, len(hard) - len(fails), len(hard)), ""]
+    if fails:
+        L += ["Failing checks:", ""] + ["- %s: measured %s, target %s" % (r["name"], r["measured"], r["target"]) for r in fails] + [""]
+    L += ["`%s` (%s) built this head from `%s` (%s) with FreeCAD %s. Run `./run.sh` to refresh this report. "
+          "Dimensions are in mm and angles in degrees, measured on the built solids."
+          % (os.path.basename(__file__), sha12(__file__), os.path.basename(CONFIG), config_sha, ".".join(App.Version()[:3])), ""]
+    notes = d.open_notes + ([v.note] if v.note else [])
+    if notes:
+        L += ["## Open values", ""] + ["- " + n for n in notes] + [""]
+    L += ["## Drawings", "",
+          "### Cross-section", "", "![Cross-section of the assembled head](%s)" % rel("section"), "",
+          "Section at X = %.2f, through an alignment bar, its pocket and a drain slot. Head height is %.3f from the "
+          "seat face to the top of the cap (limit %.2f). The dashed lines mark the shave plane on each side."
+          % (st["slot"], m.height, d.max_height), "",
+          "### Blade edge", "", "![Blade edge with the shave geometry labelled](%s)" % rel("edge-detail"), "",
+          "Section at X = %.2f, through a rib. The legend gives the measured gap, exposure, cutting angle and clamp distance."
+          % st["rib"], "",
+          "### Blade and bars, from above", "", "![Blade cutout with the bars in it](%s)" % rel("blade"), "",
+          "The reference blade as modelled, with the two bars (shaded) in its cutout. Narrow slot: %.2f wide. "
+          "Centre hole: %.2f diameter. The bars clear the blade by %.3f on each side."
+          % (d.neck_w, 2 * d.hole_r, (d.neck_w - d.bar_w) / 2.0), "",
+          "### Top cap, from below", "", "![Top cap seen from below](%s)" % rel("top_cap"), ""]
+    bar = m.bars[0] if m.bars else None
+    centre = ("Screw hole: %.2f diameter, countersunk %.2f on top." % (2 * d.hole_clear_r, d.screw_dk)
+              if d.process == "prototype" else "Post: %.2f diameter, %.2f long." % (2 * d.post_r, d.post_len))
+    L += [("Bars: %.3f wide, %.3f long. " % (bar.YLength, bar.XLength) if bar else "") + centre, "",
+          "### Baseplate, from above", "", "![Baseplate seen from above](%s)" % rel("baseplate"), ""]
+    pk = m.pockets[0] if m.pockets else None
+    L += [("Pockets: %.3f wide, %.3f long. " % (pk.YLength, pk.XLength) if pk else "")
+          + ("Bore: %.3f diameter. " % m.bore[0].XLength if m.bore else "")
+          + "Drain slots: %.2f wide, %.2f long, %d per side." % (d.slot_min_w, v.baseinfo.slot_len, d.n_slots), "",
+          "## Hard checks", "", row("Result", "Check", "Target", "Measured", "Config key"), row("---", "---", "---", "---", "---")]
+    L += [row("**FAIL**" if r["kind"] == "FAIL" else "PASS", r["name"], r["target"], r["measured"],
+              ("`%s`" % r["key"]) if r["key"] else "") for r in hard]
+    L += ["", "## Reported values", "", "The brief sets no limit on these.", "", row("Item", "Value", "Note"), row("---", "---", "---")]
+    L += [row(r["name"], r["measured"], r["key"]) for r in ck.rows if r["kind"] == "INFO"]
+    L += ["", "## Derived values", "",
+          "The config has no key for these yet. The generator derives each one by the rule shown.", "",
+          row("Key", "Value", "Rule"), row("---", "---", "---")]
+    L += [row("`%s`" % k, "%g" % derived_vals[k], why) for k, why in DERIVED.items()]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(L) + "\n")
+
+
+# ---------------------------------------------------------------- save
+def write_gui_visibility(fcstd, names):
+    vps = "".join('<ViewProvider name="%s" expanded="0"><Properties Count="1" TransientCount="0">'
+                  '<Property name="Visibility" type="App::PropertyBool"><Bool value="true"/>'
+                  '</Property></Properties></ViewProvider>' % n for n in names)
+    xml = ("<?xml version='1.0' encoding='utf-8'?>\n<Document SchemaVersion=\"1\">"
+           "<ViewProviderData Count=\"%d\">%s</ViewProviderData></Document>\n" % (len(names), vps))
+    with zipfile.ZipFile(fcstd, "a") as z:
+        if "GuiDocument.xml" not in z.namelist():
+            z.writestr("GuiDocument.xml", xml)
+
+
+def print_oriented(name, solid):
+    """Blade-contact surfaces face up. Cap: crown on the bed. Baseplate: as modelled."""
+    s = solid.copy()
+    if name == "top_cap":
+        s.rotate(Vector(0, 0, 0), Vector(1, 0, 0), 180)
+    s.translate(Vector(0, 0, -s.BoundBox.ZMin))
+    return s
+
+
+def run_one(cfg, tier, process, config_sha):
+    ident = "%s-%s-%s" % (cfg["name"], tier, process)
+    v = build_variant(cfg, tier, process)
+    d = v.d
+    m = measure(v)
+    others = [p for p in cfg["process_limits"] if p != process]
+    other = build_variant(cfg, tier, others[0])
+    m_other = measure(other)
+    tier_caps = {t: build_variant(cfg, t, process).cap for t in cfg["shave"]["tiers"] if t != tier}
+    ck = run_checks(cfg, v, m, other, m_other, tier_caps)
+
+    rev_dir = allocate_rev(os.path.join(OUT_DIR, FAMILY, tier), config_sha, process)
+    step_dir = os.path.join(rev_dir, "step"); os.makedirs(step_dir, exist_ok=True)
+    parts = {"top_cap": v.cap, "baseplate": v.base}
+
+    doc_name = re.sub(r"\W", "_", ident)
+    doc = App.getDocument(doc_name) if doc_name in App.listDocuments() else App.newDocument(doc_name)
+    for o in list(doc.Objects):
+        doc.removeObject(o.Name)
+    for name, shape in list(parts.items()) + [("blade_reference", v.blade)]:
+        obj = doc.addObject("Part::Feature", name); obj.Shape = shape; obj.Visibility = True
+    doc.recompute()
+    for o in doc.Objects:
+        o.purgeTouched()
+    fcstd = os.path.join(rev_dir, ident + ".FCStd")
+    if os.path.exists(fcstd):
+        os.remove(fcstd)                             # else FreeCAD keeps a .FCBak copy on every rerun
+    doc.saveAs(fcstd)
+    if not App.GuiUp:
+        write_gui_visibility(fcstd, [o.Name for o in doc.Objects])
+
+    manifest_parts = {}
+    for name, shape in parts.items():
+        step = os.path.join(step_dir, "%s-%s.step" % (ident, name)); shape.exportStep(step)
+        back = Part.read(step)
+        dv = abs(back.Volume - shape.Volume)
+        ck.hard("STEP read-back: %s" % name, "dV 0", "solids %d, dV %.6f mm3" % (len(back.Solids), dv),
+                len(back.Solids) == 1 and dv < 1e-3)
+        manifest_parts[name] = {"file": os.path.relpath(step, rev_dir), "volume_mm3": round(shape.Volume, 2)}
+        if process == "prototype":
+            mdir = os.path.join(rev_dir, "3mf"); os.makedirs(mdir, exist_ok=True)
+            path = os.path.join(mdir, "%s-%s.3mf" % (ident, name))
+            mesh = MeshPart.meshFromShape(Shape=print_oriented(name, shape), LinearDeflection=MESH_DEFL,
+                                          AngularDeflection=0.05, Relative=False)
+            mesh.write(path)
+            mb = Mesh.Mesh(path)
+            rel = abs(mb.Volume - shape.Volume) / shape.Volume
+            ck.hard("3MF read-back: %s" % name, "dV/V < %.0e" % MESH_TOL,
+                    "%d facets, solid %s, dV/V %.1e" % (mb.CountFacets, mb.isSolid(), rel),
+                    mb.isSolid() and rel < MESH_TOL)
+            manifest_parts[name]["print_file"] = os.path.relpath(path, rev_dir)
+    if process == "production":
+        with open(os.path.join(rev_dir, ident + "-inspection.csv"), "w") as f:
+            f.write("check,target,cad_value,config_key\n")
+            for r in ck.rows:
+                if r["kind"] != "INFO":
+                    f.write('"%s","%s","%s","%s"\n' % (r["name"], r["target"], r["measured"], r["key"]))
+
+    result = "PASS" if ck.ok else "FAIL"
+    vals = {"cap.crown_thickness": d.cap_T, "cap.crown_flat": 2 * d.cap_flat, "cap.lip_thickness": d.lip,
+            "guard.apex_radius": d.guard_r, "guard.width": d.guard_w, "guard.slot_count": d.n_slots,
+            "guard.rib_width": d.rib_w, "guard.end_wall": d.end_wall, "baseplate.thickness": d.base_T}
+    drawings = write_drawings(v, m, rev_dir, ident)
+    report = os.path.join(rev_dir, ident + "-report.md")
+    write_report(report, ident, v, m, ck, result, drawings, config_sha, vals)
+    say("")
+    say("%s  (%s tier, %s) -> %s" % (ident, tier, process, os.path.relpath(rev_dir)))
+    for note in d.open_notes + ([v.note] if v.note else []):
+        say("  OPEN  " + note)
+    if process == "production":
+        say("  OPEN  dimensioned drawing (DXF) is not built yet (question 11); wrote the inspection list")
+    ck.show()
+    say("  derived, no config key yet:")
+    for k, why in DERIVED.items():
+        say("        %-22s %-7g = %s" % (k, vals[k], why))
+    say("  report -> %s" % os.path.relpath(report))
+
+    manifest = {
+        "format": "cad-manifest", "schemaVersion": 1,
+        "design": "%s@%s" % (ident, config_sha),
+        "config_sha": config_sha, "config_path": safe_relpath(CONFIG),
+        "generator": "%s@%s" % (os.path.basename(__file__), sha12(__file__)),
+        "units": "mm", "tier": tier, "process": process,
+        "params": {"gap": d.gap, "exposure": d.exposure, "bend_angle": d.theta_deg,
+                   "bend_radius": round(d.R, 4), "part_clearance": d.clr, "min_wall": d.min_wall,
+                   "screw_head_dia": d.screw_dk, "screw_head_height": d.screw_k,
+                   "derived": {k: vals[k] for k in DERIVED}},
+        "open": d.open_notes,
+        "parts": manifest_parts,
+        "report": os.path.relpath(report, rev_dir),
+        "drawings": sorted(os.path.relpath(p, rev_dir) for p in drawings.values()),
+        "checks": {"rows": ck.rows, "result": result},
+        "generated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    json.dump(manifest, open(os.path.join(rev_dir, "cad-manifest.json"), "w"), indent=2)
+
+    if EXPORT_DIR and result == "PASS":      # curated, committed copy; never export a failing build
+        dst = os.path.join(EXPORT_DIR, tier); os.makedirs(dst, exist_ok=True)
+        for f in glob.glob(os.path.join(step_dir, "*.step")) + glob.glob(os.path.join(rev_dir, "3mf", "*.3mf")):
+            shutil.copy2(f, dst)
+        shutil.copy2(os.path.join(rev_dir, "cad-manifest.json"), os.path.join(dst, ident + ".manifest.json"))
+        shutil.copy2(report, dst)
+        os.makedirs(os.path.join(dst, "drawings"), exist_ok=True)
+        for f in drawings.values():
+            shutil.copy2(f, os.path.join(dst, "drawings"))
+        say("  exported -> %s" % dst)
+    elif EXPORT_DIR:
+        say("  not exported: the build failed its checks")
+    say("RESULT %s  %s" % (result, ident))
+    App.closeDocument(doc.Name)
+    return ck.ok
+
+
+def main():
+    cfg = load_config(CONFIG)
+    process = os.environ.get("PROCESS") or cfg["process"]
+    tier = os.environ.get("TIER") or cfg["shave"]["tier"]
+    tiers = list(cfg["shave"]["tiers"]) if tier == "all" else [tier]
+    config_sha = sha12(CONFIG)
+    results = [run_one(cfg, t, process, config_sha) for t in tiers]
+    if len(tiers) > 1:
+        say("SERIES %s  %d of %d tiers pass" % ("PASS" if all(results) else "FAIL", sum(results), len(tiers)))
+
+
+try:
+    main()
+except Exception:
+    import traceback
+    say(traceback.format_exc())
+    say("RESULT FAIL  generator error")

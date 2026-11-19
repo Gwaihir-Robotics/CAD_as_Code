@@ -83,6 +83,7 @@ templates/
   verify_template.FCMacro     standalone STEP checks over generated/
   run.sh
 examples/stator-jig/        trimmed real stator configs + arbor runner
+examples/safety-razor/      worked beginner example: brief → config → checked razor head
 blog/                       the post and its (regenerable) images
 ```
 

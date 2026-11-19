@@ -1,0 +1,103 @@
+# Safety razor head: top cap + baseplate. See brief.md for definitions and reasons.
+# units: mm, deg
+# REFERENCE = bought-part dimension, never change. HARD = checked; a miss fails the run.
+# OPEN = suggested default for an open question in brief.md.
+name: de-head
+process: prototype            # prototype | production; shave geometry is identical in both
+
+# ── Reference: Dorco ST301 blade ─────────────────────────────────
+blade:                        # REFERENCE
+  model: Dorco ST301 Platinum Extra   # not the STP301 "Prime"
+  source: null                # OPEN (question 1): "measured, n blades, caliper 0.01 mm"
+  length: 42.70               # OPEN (question 1): spec value until measured
+  envelope_length: 43.10      # covers the longest blade in the B&B table (43.04)
+  edge_span: 37.00            # OPEN (question 1)
+  width: 22.00                # OPEN (question 1): moves the edge, so gap and exposure
+  thickness: 0.10             # forum reports ~0.100 for ST300/ST301; OPEN (question 1)
+  # Centre cutout: keyhole pattern, symmetric about the centre hole. Traced from two
+  # pictures, neither to scale (reference/de-blade-drawing.md), so every value is provisional.
+  slot_length: 36.00          # OPEN (question 1): end to end; B&B measures 35.98–36.15 across brands
+  hole_dia: 5.80              # the pictures read 5.0–5.9; it only has to clear the M5 post, as on any DE blade
+  neck_width: 2.40            # OPEN (question 1): narrow slot; the pictures read 2.2–2.5; sets the blade's play
+  cutout:                     # OPEN (question 1): wide features at ±x; they only need to clear the bars
+    - {shape: oval,    x: 8.35,  length: 1.80, width: 7.00}
+    - {shape: diamond, x: 12.80, length: 5.00, width: 6.80}
+    - {shape: oval,    x: 17.10, length: 1.80, width: 7.00}   # its outer end is the end of the cutout
+  any_blade:                  # OPEN (question 2): the narrowest and shortest cutout we have a figure for
+    neck_width: 2.10          # narrow slot, from an unsourced spec (round holes 5.35 at ±10.025)
+    reach: 12.40              # furthest a 2.00 bar can reach from centre in that cutout, less 0.10
+
+# ── Post and prototype screw ─────────────────────────────────────
+hardware:
+  post_thread: M5x0.8         # REFERENCE: matches handle_thread; production calls it out on the drawing
+  post_dia: 5.00
+  post_length: 9.00           # spec 8–10; must reach the handle thread
+  screw: M5x0.8 countersunk flat head, stainless   # prototype stand-in for the post
+  screw_head_dia: null        # OPEN (question 5): from the screw's datasheet
+  screw_head_height: null     # OPEN (question 5)
+  handle_thread: M5x0.8 female  # REFERENCE: the thread most DE handle makers use
+
+# ── Shave geometry ───────────────────────────────────────────────
+shave:
+  bend_angle: 32.0            # HARD; 30.0 … 35.0
+  tier: mild                  # which tier a single build uses; the series builds all of them
+  tiers:                      # HARD per tier; gap and exposure set as a pair (brief.md: Shave tiers)
+    mild:     {gap: 0.65, exposure: 0.00}    # print this first
+    medium:   {gap: 0.75, exposure: 0.03}
+    med_aggr: {gap: 0.90, exposure: 0.08}
+
+guard:
+  style: closed_comb
+  profile: straight           # OPEN (question 4): straight | scalloped | slotted
+
+# ── Fits and limits ──────────────────────────────────────────────
+fit:
+  clamp_max: 1.50             # HARD; max distance from edge to clamp line
+
+process_limits:
+  prototype:
+    part_clearance: 0.25      # HARD; per side, cap ↔ baseplate, FDM
+    min_wall: 1.20            # HARD
+  production:
+    part_clearance: 0.15      # HARD; OPEN (question 9): factory to confirm
+    min_wall: 1.20            # HARD; OPEN (question 9): metal can go thinner
+
+material:
+  prototype: PETG-CF          # OPEN (question 10): PETG-CF | PET-CF; not PLA-CF
+  production: null            # OPEN (question 8): brass | stainless
+  production_method: null     # OPEN (question 8): machined | cast
+
+# ── Head ─────────────────────────────────────────────────────────
+head:
+  length: 44.00
+  flat_width: 5.80            # flat centre section of the bent blade; the bend starts at its edge
+  max_height: 6.00            # HARD; reference razor measures about 6
+  depth_range: [19.00, 20.50] # OPEN (question 3): reported, not checked; no bend radius reaches it (build is 22.7)
+  bend_radius: null           # OPEN (question 3): null = derive from bend_angle and clamp_max
+  end_notches: false          # OPEN (question 6)
+  notch_depth: 1.50           # used when end_notches is true
+
+# ── Raised alignment bars on the top cap underside ───────────────
+bars:
+  width: 2.00                 # HARD; any_blade.neck_width minus 2 x min_play; same in every process
+  min_play: 0.05              # HARD; per side, in the narrowest known slot
+  length: 7.90                # OPEN (question 2): along X
+  height: 2.50
+  offset_x: 8.45              # OPEN (question 2): bar centre at ±X; bar spans 4.5–12.4
+
+# ── Baseplate ────────────────────────────────────────────────────
+baseplate:
+  bore_dia_extra: 0.00        # bore = post_dia + 2 * part_clearance + this
+  drain_slot_min_width: 1.50  # HARD; slots under the blade/safety-bar interface
+  handle_seat_dia: 11.00      # flat boss on the underside for the handle
+
+# ── Finish ───────────────────────────────────────────────────────
+finish:
+  edge_break: 0.40            # skin-contact edges: cap crown and safety bar
+  prototype: sand skin-contact surfaces after printing
+  production: null            # OPEN (question 8): plating for brass, polish for stainless
+
+# ── Output ───────────────────────────────────────────────────────
+output:
+  dir: output                 # regenerable, gitignored
+  exports: exports            # curated copy of a passing build
